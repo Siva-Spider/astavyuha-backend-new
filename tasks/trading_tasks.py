@@ -13,6 +13,8 @@ import Next_Now_intervals as nni
 import combinding_dataframes as cdf
 import indicators as ind
 from time import sleep as gsleep
+import redis
+import os
 
 # ---- Celery setup ----
 celery_app = Celery(
@@ -20,6 +22,9 @@ celery_app = Celery(
     broker="redis://localhost:6379/1",
     backend="redis://localhost:6379/2"
 )
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+r = redis.StrictRedis.from_url(REDIS_URL, decode_responses=True)
 
 stock_map = {
         "RELIANCE INDUSTRIES LTD": "RELIANCE",
@@ -179,7 +184,6 @@ def run_trading_logic_for_all(trading_parameters, selected_brokers):
     now_interval, next_interval = nni.round_to_next_interval(interval)
     push_log(f"🕓 Present Interval Start: {now_interval}, Next Interval: {next_interval}")
 
-    import redis
     r = redis.StrictRedis(host="localhost", port=6379, db=5, decode_responses=True)
 
     # STEP 2.5: Initialize active trades in Redis safely
