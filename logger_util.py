@@ -40,15 +40,12 @@ _log_lock = threading.Lock()
 
 # --- Redis connection ---
 try:
-    import redis
-    redis_client = redis.StrictRedis(host="localhost", port=6379, db=5, decode_responses=True)
+    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
     redis_client.ping()
-    USE_REDIS = True
-    print("✅ Logger connected to Redis (shared cross-process logs).")
+    print(f"✅ Connected to Redis at {REDIS_URL}")
 except Exception as e:
-    redis_client = None
-    USE_REDIS = False
     print(f"⚠️ Redis not available, using in-memory logging. Error: {e}")
+    redis_client = None
 
 # ==========================================================
 # 📝 Logging Functions
