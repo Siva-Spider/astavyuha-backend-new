@@ -7,8 +7,12 @@ import json
 from collections import deque
 from zoneinfo import ZoneInfo
 from colorama import Fore, Style, init
+import redis
 
 init(autoreset=True)
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+r = redis.StrictRedis.from_url(REDIS_URL, decode_responses=True)
 
 # ==========================================================
 # 🌐 Global Autotrade Logger Configuration
