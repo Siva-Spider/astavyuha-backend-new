@@ -1,131 +1,102 @@
 # logger_util.py
-import logging
 import os
-import datetime
-import threading
-import json
-from collections import deque
-from zoneinfo import ZoneInfo
-from colorama import Fore, Style, init
 import redis
-
-init(autoreset=True)
-
-REDIS_URL = os.getenv("REDIS_URL", "").strip() or "redis://localhost:6379"
-r = redis.StrictRedis.from_url(REDIS_URL, decode_responses=True)
-
-# ==========================================================
-# 🌐 Global Autotrade Logger Configuration
-# ==========================================================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
-logger = logging.getLogger("autotrade")
-if not logger.hasHandlers():
-    file_handler = logging.FileHandler("autotrade.log")
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-# ==========================================================
-# 🧠 Shared Redis + Local Fallback Logging
-# ==========================================================
-
-_LOG_MAX = int(os.environ.get("AUTOTRADE_LOG_BUFFER", 500))
-_log_buf = deque(maxlen=_LOG_MAX)
-_log_lock = threading.Lock()
-
-# --- Redis connection ---
-try:
-    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-    redis_client.ping()
-    print(f"✅ Connected to Redis at {REDIS_URL}")
-except Exception as e:
-    print(f"⚠️ Redis not available, using in-memory logging. Error: {e}")
-    redis_client = None
-
-# ==========================================================
-# 📝 Logging Functions
-# ==========================================================
-import redis
+import ssl
 import json
 import datetime
 import logging
 from threading import Lock
+from collections import deque
+from zoneinfo import ZoneInfo
+from urllib.parse import urlparse
 
-# ---------------------------------------------------------------------
-# 🔧 Setup
-# ---------------------------------------------------------------------
-log_buffer = []
+# ==========================================================
+# 🌐 Redis Setup
+# ==========================================================
+REDIS_URL = os.getenv("REDIS_URL", "").strip() or "redis://localhost:6379"
+LOG_BUFFER = deque(maxlen=500)
 log_lock = Lock()
 
-# Configure global console logger
+def connect_redis():
+    """Connect to Redis (Upstash/Local) safely."""
+    try:
+        parsed = urlparse(REDIS_URL)
+        if parsed.scheme == "rediss":
+            print(f"✅ Connecting securely to Redis: {parsed.hostname}")
+            return redis.StrictRedis.from_url(
+                REDIS_URL,
+                ssl=True,
+                ssl_cert_reqs=ssl.CERT_NONE,
+                decode_responses=True
+            )
+        else:
+            print(f"✅ Connecting to Redis: {parsed.hostname}")
+            return redis.StrictRedis.from_url(REDIS_URL, decode_responses=True)
+    except Exception as e:
+        print(f"⚠️ Redis not available, using in-memory fallback: {e}")
+        return None
+
+redis_client = connect_redis()
+
+# ==========================================================
+# 🧠 Global Logger Setup
+# ==========================================================
 console_logger = logging.getLogger("TradeLogger")
 console_logger.setLevel(logging.INFO)
 
-# Avoid duplicate handlers
 if not console_logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    formatter = logging.Formatter("%(asctime)s - %(levelname)-7s - %(message)s")
     handler.setFormatter(formatter)
     console_logger.addHandler(handler)
 
-
-# ---------------------------------------------------------------------
-# ✅ Push Log (to Redis + Console + Memory)
-# ---------------------------------------------------------------------
+# ==========================================================
+# 📝 Push Log
+# ==========================================================
 def push_log(message, level="info"):
-    """Push log message to Redis (for UI), in-memory buffer, and Celery/console."""
-    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    """Push log message to Redis (for UI), in-memory buffer, and console."""
+    ts = datetime.datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M:%S")
     entry = {"ts": ts, "level": level.lower(), "message": str(message), "type": "log"}
 
-    # Save to in-memory buffer
+    # Add to memory
     with log_lock:
-        log_buffer.append(entry)
-        if len(log_buffer) > 1000:
-            log_buffer.pop(0)
+        LOG_BUFFER.append(entry)
 
-    # 🔴 Redis: store and publish for live UI
-    try:
-        r = redis.StrictRedis(host="localhost", port=6379, db=5, decode_responses=True)
-        r.rpush("autotrade_logs", json.dumps(entry))   # for history
-        r.publish("live_logs", json.dumps(entry))      # for streaming
-    except Exception as e:
-        console_logger.warning(f"[push_log] Redis unavailable: {e}")
+    # Publish to Redis (for live updates)
+    if redis_client:
+        try:
+            redis_client.rpush("autotrade_logs", json.dumps(entry))  # history
+            redis_client.publish("log_stream", json.dumps(entry))    # live stream
+        except Exception as e:
+            console_logger.warning(f"[push_log] Redis unavailable: {e}")
 
-    # 🟢 Print to Celery/FastAPI console
-    level_upper = level.upper()
-    log_text = f"[{ts}] {level_upper:7}: {message}"
-
+    # Print to console
+    formatted = f"[{ts}] {level.upper():7}: {message}"
     if level.lower() == "error":
-        console_logger.error(log_text)
+        console_logger.error(formatted)
     elif level.lower() == "warning":
-        console_logger.warning(log_text)
+        console_logger.warning(formatted)
     else:
-        console_logger.info(log_text)
-
+        console_logger.info(formatted)
 
 def get_log_buffer():
-    """Return in-memory log list (for fallback mode)"""
+    """Return local memory log buffer."""
     with log_lock:
-        return list(log_buffer)
+        return list(LOG_BUFFER)
 
 def push_payload(name, data):
-    """Push structured payloads (trade data, metrics, etc.)"""
+    """Push structured payload (trade data, metrics)."""
     ts = datetime.datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M:%S")
     entry = {"type": "payload", "ts": ts, "name": name, "data": data}
 
-    if USE_REDIS:
+    if redis_client:
         try:
-            redis_client.lpush("autotrade_logs", json.dumps(entry))
-            redis_client.ltrim("autotrade_logs", 0, _LOG_MAX)
+            redis_client.rpush("autotrade_logs", json.dumps(entry))
+            redis_client.ltrim("autotrade_logs", 0, 499)
         except Exception:
             pass
 
-    with _log_lock:
-        _log_buf.append(entry)
+    with log_lock:
+        LOG_BUFFER.append(entry)
 
-__all__ = ["logger", "push_log", "push_payload", "get_log_buffer"]
+__all__ = ["push_log", "get_log_buffer", "push_payload"]
