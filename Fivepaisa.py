@@ -2,7 +2,7 @@ import requests
 import sys
 import datetime
 import pandas as pd
-from logger_util import logger, push_log, push_payload, get_log_buffer
+from logger_util import push_log
 
 def fivepaisa_get_balance(app_key, access_token, client_code):
 
