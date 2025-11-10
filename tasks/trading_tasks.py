@@ -19,11 +19,20 @@ import os
 # ---- Celery setup ----
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+import ssl
+
 celery_app = Celery(
     "astavyuha_tasks",
     broker=REDIS_URL,
-    backend=REDIS_URL
+    backend=REDIS_URL,
+    broker_use_ssl={
+        "ssl_cert_reqs": ssl.CERT_NONE
+    },
+    redis_backend_use_ssl={
+        "ssl_cert_reqs": ssl.CERT_NONE
+    },
 )
+
 
 
 r = redis.StrictRedis.from_url(REDIS_URL, decode_responses=True)
