@@ -5,7 +5,7 @@ import pandas as pd
 import pyotp
 from SmartApi import SmartConnect
 
-from logger_util import logger, push_log, push_payload, get_log_buffer
+from logger_util import push_log
 import pytz
 import requests
 import sys
