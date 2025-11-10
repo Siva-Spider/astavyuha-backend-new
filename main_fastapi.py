@@ -5,9 +5,6 @@ from fastapi.middleware.wsgi import WSGIMiddleware
 from pydantic import BaseModel
 import sqlite3
 import os
-import time
-import asyncio
-
 # --- Additional Imports (if not already in main_fastapi.py) ---
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pathlib import Path
@@ -28,7 +25,8 @@ from logger_util import push_log, get_log_buffer
 from fastapi import Request
 import queue
 import redis, json, time, asyncio, threading, queue
-
+import ssl
+from urllib.parse import urlparse
 
 # Existing broker map
 broker_map = {
@@ -310,34 +308,45 @@ async def get_profit_loss(request: Request):
 async def stream_logs(request: Request):
     """
     Real-time Server-Sent Events stream of logs via Redis Pub/Sub.
-    Falls back to in-memory buffer if Redis unavailable.
+    Uses Upstash Redis if REDIS_URL is available, else falls back to in-memory.
     """
-    import redis
-    import json
-    import asyncio
+    REDIS_URL = os.getenv("REDIS_URL", "").strip()
+    USE_REDIS = False
+    pubsub = None
 
     try:
-        redis_client = redis.StrictRedis(host="localhost", port=6379, db=5, decode_responses=True)
-        redis_client.ping()
-        pubsub = redis_client.pubsub()
-        pubsub.subscribe("live_logs")
-        USE_REDIS = True
-        print("📡 Using Redis Pub/Sub for live log streaming.")
+        if REDIS_URL:
+            parsed = urlparse(REDIS_URL)
+            print(f"📡 Connecting to Redis for log streaming: {parsed.hostname}")
+
+            if parsed.scheme == "rediss":
+                redis_client = redis.StrictRedis.from_url(
+                    REDIS_URL,
+                    ssl_cert_reqs=ssl.CERT_NONE,
+                    decode_responses=True
+                )
+            else:
+                redis_client = redis.StrictRedis.from_url(REDIS_URL, decode_responses=True)
+
+            redis_client.ping()
+            pubsub = redis_client.pubsub()
+            pubsub.subscribe("log_stream")  # Make sure this matches your logger_util.py channel
+            USE_REDIS = True
+            print("✅ Using Redis Pub/Sub for live log streaming.")
+        else:
+            print("⚠️ REDIS_URL not found, falling back to memory logs.")
     except Exception as e:
         print(f"⚠️ Redis Pub/Sub unavailable ({e}), using in-memory fallback.")
-        USE_REDIS = False
-        pubsub = None
 
     async def redis_stream():
         while True:
             message = pubsub.get_message(ignore_subscribe_messages=True, timeout=1)
             if message:
                 try:
-                    data = json.loads(message["data"])
-                    yield f"data: {json.dumps(data)}\n\n"
+                    yield f"data: {json.dumps({'level':'info','message': message['data']})}\n\n"
                 except Exception as e:
-                    yield f'data: {{"type":"log","level":"ERROR","message":"Invalid Redis log: {str(e)}"}}\n\n'
-            await asyncio.sleep(0.1)
+                    yield f'data: {{"level":"error","message":"Invalid Redis log: {str(e)}"}}\n\n'
+            await asyncio.sleep(0.2)
 
     async def memory_stream():
         from logger_util import get_log_buffer
