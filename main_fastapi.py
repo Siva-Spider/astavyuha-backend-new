@@ -49,11 +49,7 @@ try:
 except Exception:
     celery_app = None
 # Import the task (tasks/trading_tasks.py should define start_trading_loop)
-try:
-    from tasks.trading_tasks import start_trading_loop
-except Exception:
-    # task may not exist yet — handle gracefully
-    start_trading_loop = None
+from tasks.trading_tasks import celery_app, start_trading_loop
 
 # Create FastAPI app
 app = FastAPI(title="Astavyuha Backend (FastAPI wrapper)", version="1.0.0")
