@@ -18,22 +18,21 @@ LOG_BUFFER = deque(maxlen=500)
 log_lock = Lock()
 
 def connect_redis():
-    """Connect to Redis (Upstash/Local) safely."""
+    """Connect to Redis (Upstash or local) safely."""
     try:
         parsed = urlparse(REDIS_URL)
         if parsed.scheme == "rediss":
-            print(f"✅ Connecting securely to Redis: {parsed.hostname}")
+            print(f"✅ Secure connection to Redis: {parsed.hostname}")
             return redis.StrictRedis.from_url(
                 REDIS_URL,
-                ssl=True,
-                ssl_cert_reqs=ssl.CERT_NONE,
+                ssl_cert_reqs=ssl.CERT_NONE,   # ✅ Only this, not ssl=True
                 decode_responses=True
             )
         else:
             print(f"✅ Connecting to Redis: {parsed.hostname}")
             return redis.StrictRedis.from_url(REDIS_URL, decode_responses=True)
     except Exception as e:
-        print(f"⚠️ Redis not available, using in-memory fallback: {e}")
+        print(f"⚠️ Redis connection failed: {e}")
         return None
 
 redis_client = connect_redis()
