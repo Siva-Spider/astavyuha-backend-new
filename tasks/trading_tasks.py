@@ -15,12 +15,15 @@ import indicators as ind
 from time import sleep as gsleep
 import redis
 import os
-
-# ---- Celery setup ----
-REDIS_URL = os.getenv("REDIS_URL", "").strip() or "redis://localhost:6379"
-
 import ssl
 
+# ---- Celery setup ----
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+if not REDIS_URL:
+    print("⚠️ REDIS_URL not found, defaulting to localhost Redis (for dev).")
+    REDIS_URL = "redis://localhost:6379"
+
+print(f"🚀 Initializing Celery with broker: {REDIS_URL}")
 celery_app = Celery(
     "astavyuha_tasks",
     broker=REDIS_URL,
