@@ -11,7 +11,7 @@ import redis
 
 init(autoreset=True)
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_URL = os.getenv("REDIS_URL", "").strip() or "redis://localhost:6379"
 r = redis.StrictRedis.from_url(REDIS_URL, decode_responses=True)
 
 # ==========================================================
