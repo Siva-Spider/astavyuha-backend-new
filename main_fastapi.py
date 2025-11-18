@@ -29,7 +29,10 @@ import queue
 import redis, json, time, asyncio, threading, queue
 import ssl
 from urllib.parse import urlparse
+<<<<<<< HEAD
  # re-use the same module that has websocket_connections
+=======
+>>>>>>> d9757980f8789a522d1ce92544da52526be0c168
 
 # Existing broker map
 broker_map = {
@@ -51,7 +54,11 @@ try:
 except Exception:
     celery_app = None
 # Import the task (tasks/trading_tasks.py should define start_trading_loop)
+<<<<<<< HEAD
 from backend.tasks.trading_tasks import start_trading_loop
+=======
+from tasks.trading_tasks import celery_app, start_trading_loop
+>>>>>>> d9757980f8789a522d1ce92544da52526be0c168
 
 # Create FastAPI app
 app = FastAPI(title="Astavyuha Backend (FastAPI wrapper)", version="1.0.0")
@@ -434,6 +441,69 @@ async def get_profit_loss(request: Request):
 
         raise HTTPException(status_code=500, detail=str(e))
 
+<<<<<<< HEAD
+=======
+@app.get("/api/stream-logs")
+async def stream_logs(request: Request):
+    """
+    Real-time Server-Sent Events stream of logs via Redis Pub/Sub.
+    Uses Upstash Redis if REDIS_URL is available, else falls back to in-memory.
+    """
+    REDIS_URL = os.getenv("REDIS_URL", "").strip()
+    USE_REDIS = False
+    pubsub = None
+
+    try:
+        if REDIS_URL:
+            parsed = urlparse(REDIS_URL)
+            print(f"📡 Connecting to Redis for log streaming: {parsed.hostname}")
+
+            if parsed.scheme == "rediss":
+                redis_client = redis.StrictRedis.from_url(
+                    REDIS_URL,
+                    ssl_cert_reqs=ssl.CERT_NONE,
+                    decode_responses=True
+                )
+            else:
+                redis_client = redis.StrictRedis.from_url(REDIS_URL, decode_responses=True)
+
+            redis_client.ping()
+            pubsub = redis_client.pubsub()
+            pubsub.subscribe("log_stream")  # Make sure this matches your logger_util.py channel
+            USE_REDIS = True
+            print("✅ Using Redis Pub/Sub for live log streaming.")
+        else:
+            print("⚠️ REDIS_URL not found, falling back to memory logs.")
+    except Exception as e:
+        print(f"⚠️ Redis Pub/Sub unavailable ({e}), using in-memory fallback.")
+
+    async def redis_stream():
+        while True:
+            message = pubsub.get_message(ignore_subscribe_messages=True, timeout=1)
+            if message:
+                try:
+                    yield f"data: {json.dumps({'level':'info','message': message['data']})}\n\n"
+                except Exception as e:
+                    yield f'data: {{"level":"error","message":"Invalid Redis log: {str(e)}"}}\n\n'
+            await asyncio.sleep(0.2)
+
+    async def memory_stream():
+        from logger_util import get_log_buffer
+        last_len = 0
+        while True:
+            logs = get_log_buffer()
+            if len(logs) > last_len:
+                for log in logs[last_len:]:
+                    yield f"data: {json.dumps(log)}\n\n"
+                last_len = len(logs)
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        redis_stream() if USE_REDIS else memory_stream(),
+        media_type="text/event-stream",
+    )
+
+>>>>>>> d9757980f8789a522d1ce92544da52526be0c168
 @app.post("/api/start-all-trading")
 async def start_trading(request: Request):
     """

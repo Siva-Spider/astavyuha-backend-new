@@ -5,7 +5,11 @@ import pandas as pd
 import pyotp
 from SmartApi import SmartConnect
 
+<<<<<<< HEAD
 import backend.logger_util as logger_util
+=======
+from logger_util import push_log
+>>>>>>> d9757980f8789a522d1ce92544da52526be0c168
 import pytz
 import requests
 import sys

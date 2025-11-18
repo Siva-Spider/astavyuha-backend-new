@@ -3,7 +3,11 @@ import requests
 import sys
 import pandas as pd
 import datetime
+<<<<<<< HEAD
 import backend.logger_util as logger_util
+=======
+from logger_util import push_log
+>>>>>>> d9757980f8789a522d1ce92544da52526be0c168
 
 def zerodha_get_equity_balance(api_key, access_token):
 

@@ -24,6 +24,24 @@ if not REDIS_URL:
     REDIS_URL = "redis://localhost:6379"
 
 print(f"🚀 Initializing Celery with broker: {REDIS_URL}")
+<<<<<<< HEAD
+
+r = redis.StrictRedis.from_url(REDIS_URL, decode_responses=True)
+=======
+celery_app = Celery(
+    "astavyuha_tasks",
+    broker=REDIS_URL,
+    backend=REDIS_URL,
+    broker_use_ssl={
+        "ssl_cert_reqs": ssl.CERT_NONE
+    },
+    redis_backend_use_ssl={
+        "ssl_cert_reqs": ssl.CERT_NONE
+    },
+)
+>>>>>>> d9757980f8789a522d1ce92544da52526be0c168
+
+
 
 r = redis.StrictRedis.from_url(REDIS_URL, decode_responses=True)
 
