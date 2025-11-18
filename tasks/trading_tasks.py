@@ -1,25 +1,31 @@
 # tasks/trading_tasks.py
-from celery import Celery
-from logger_util import push_log
+from backend.celery_app import celery_app
+import backend.logger_util as logger_util
 import json, datetime, time, gc
 from zoneinfo import ZoneInfo
 # ---- import your broker and helper modules ----
-import Upstox as us
-import Zerodha as zr
-import AngelOne as ar
-import Groww as gr
-import Fivepaisa as fp
-import Next_Now_intervals as nni
-import combinding_dataframes as cdf
-import indicators as ind
+from backend import Upstox as us
+from backend import Zerodha as zr
+from backend import AngelOne as ar
+from backend import Groww as gr
+from backend import Fivepaisa as fp
+from backend import Next_Now_intervals as nni
+from backend import combinding_dataframes as cdf
+from backend import indicators as ind
 from time import sleep as gsleep
+import redis
+import os
+import ssl
 
 # ---- Celery setup ----
-celery_app = Celery(
-    "astavyuha_tasks",
-    broker="redis://localhost:6379/1",
-    backend="redis://localhost:6379/2"
-)
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+if not REDIS_URL:
+    print("⚠️ REDIS_URL not found, defaulting to localhost Redis (for dev).")
+    REDIS_URL = "redis://localhost:6379"
+
+print(f"🚀 Initializing Celery with broker: {REDIS_URL}")
+
+r = redis.StrictRedis.from_url(REDIS_URL, decode_responses=True)
 
 stock_map = {
         "RELIANCE INDUSTRIES LTD": "RELIANCE",
@@ -92,37 +98,37 @@ broker_map = {"u": "upstox", "z": "zerodha", "a": "angelone", "f": "5paisa", "g"
 reverse_stock_map = {}   # optional - fill if you have mapping
 
 
-@celery_app.task(bind=True, name="tasks.trading_tasks.start_trading_loop")
+@celery_app.task(bind=True)
 def start_trading_loop(self):
     """
     Celery entrypoint for executing the full trading logic.
     Reads config file saved by FastAPI and runs trading loop.
     """
-    push_log("🚀 Trading engine started inside Celery worker.")
+    logger_util.push_log("🚀 Trading engine started inside Celery worker.")
     try:
         with open("trading_config.json", "r") as f:
             config = json.load(f)
         trading_parameters = config.get("tradingParameters", [])
         selected_brokers = config.get("selectedBrokers", [])
     except Exception as e:
-        push_log(f"❌ Could not read trading_config.json: {e}", "error")
+        logger_util.push_log(f"❌ Could not read trading_config.json: {e}", "error")
         return
 
     try:
         run_trading_logic_for_all(trading_parameters, selected_brokers)
     except Exception as e:
-        push_log(f"💥 Trading loop crashed: {e}", "error")
+        logger_util.push_log(f"💥 Trading loop crashed: {e}", "error")
         return
 
-    push_log("✅ Trading engine task finished successfully.")
+    logger_util.push_log("✅ Trading engine task finished successfully.")
 
 
 def run_trading_logic_for_all(trading_parameters, selected_brokers):
     """Your full trading logic integrated to Celery context."""
     import gc
 
-    push_log("✅ Trading loop started for all selected stocks")
-    push_log("⏳ Starting trading cycle setup...")
+    logger_util.push_log("✅ Trading loop started for all selected stocks")
+    logger_util.push_log("⏳ Starting trading cycle setup...")
     # Activate trades
     for stock in trading_parameters:
         active_trades[stock['symbol_value']] = True
@@ -141,7 +147,7 @@ def run_trading_logic_for_all(trading_parameters, selected_brokers):
         interval = stock.get('interval')
         exchange_type = stock.get('type')
 
-        push_log(f"🔑 Fetching instrument key for company : {company}, Name : {name} symbol :{symbol} via Broker : {broker_name}...")
+        logger_util.push_log(f"🔑 Fetching instrument key for company : {company}, Name : {name} symbol :{symbol} via Broker : {broker_name}...")
 
         instrument_key = None
         try:
@@ -165,32 +171,31 @@ def run_trading_logic_for_all(trading_parameters, selected_brokers):
 
             if instrument_key:
                 stock['instrument_key'] = instrument_key
-                push_log(f"✅ Found instrument key {instrument_key} for {symbol}")
+                logger_util.push_log(f"✅ Found instrument key {instrument_key} for {symbol}")
             else:
-                push_log(f"⚠️ No instrument key found for {symbol}, skipping.", "warning")
+                logger_util.push_log(f"⚠️ No instrument key found for {symbol}, skipping.", "warning")
                 active_trades[symbol] = False
 
         except Exception as e:
-            push_log(f"❌ Error fetching instrument key for {symbol}: {e}", "error")
+            logger_util.push_log(f"❌ Error fetching instrument key for {symbol}: {e}", "error")
             active_trades[symbol] = False
 
     # STEP 2: Interval handling setup
     interval = trading_parameters[0].get("interval", "1minute")
     now_interval, next_interval = nni.round_to_next_interval(interval)
-    push_log(f"🕓 Present Interval Start: {now_interval}, Next Interval: {next_interval}")
+    logger_util.push_log(f"🕓 Present Interval Start: {now_interval}, Next Interval: {next_interval}")
 
-    import redis
     r = redis.StrictRedis(host="localhost", port=6379, db=5, decode_responses=True)
 
     # STEP 2.5: Initialize active trades in Redis safely
     symbols = [s["symbol_value"] for s in trading_parameters if s.get("symbol_value")]
     if not symbols:
-        push_log("⚠️ No valid symbols to start trading. Exiting.", "warning")
+        logger_util.push_log("⚠️ No valid symbols to start trading. Exiting.", "warning")
         return
 
     r.delete("active_trades")
     r.sadd("active_trades", *symbols)
-    push_log(f"🟢 Active trades initialized in Redis: {', '.join(symbols)}")
+    logger_util.push_log(f"🟢 Active trades initialized in Redis: {', '.join(symbols)}")
 
     # Small buffer for Redis sync
     time.sleep(0.5)
@@ -202,7 +207,7 @@ def run_trading_logic_for_all(trading_parameters, selected_brokers):
         trading_parameters = [s for s in trading_parameters if s["symbol_value"] in active_symbols]
 
         if not trading_parameters:
-            push_log("🏁 All trades stopped — exiting trading loop.")
+            logger_util.push_log("🏁 All trades stopped — exiting trading loop.")
             break
 
         for stock in trading_parameters:
@@ -210,13 +215,13 @@ def run_trading_logic_for_all(trading_parameters, selected_brokers):
 
             # ✅ Skip if symbol was disconnected mid-loop
             if symbol not in active_symbols:
-                push_log(f"🛑 Skipping {symbol} — disconnected by user.")
+                logger_util.push_log(f"🛑 Skipping {symbol} — disconnected by user.")
                 continue
 
         now = datetime.datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M:%S")
         if now >= next_interval:
             now_interval, next_interval = nni.round_to_next_interval(interval)
-            push_log(f"⏱ New interval reached: {now_interval}")
+            logger_util.push_log(f"⏱ New interval reached: {now_interval}")
 
             # Fetch candles for each stock
             for stock in trading_parameters:
@@ -230,7 +235,7 @@ def run_trading_logic_for_all(trading_parameters, selected_brokers):
                 exchange_type = stock.get('type')
                 tick_size = stock.get('tick_size')
 
-                push_log(f"🕯 Fetching candles for {symbol}-{company} from {broker_name}")
+                logger_util.push_log(f"🕯 Fetching candles for {symbol}-{company} from {broker_name}")
 
                 combined_df = None
                 try:
@@ -274,21 +279,21 @@ def run_trading_logic_for_all(trading_parameters, selected_brokers):
                             combined_df = fp.fivepaisa_historical_data_fetch(access_token, instrument_key, interval, 25)
 
                 except Exception as e:
-                    push_log(f"❌ Error fetching data for {symbol}: {e}", "error")
+                    logger_util.push_log(f"❌ Error fetching data for {symbol}: {e}", "error")
                     continue
 
                 if combined_df is None or combined_df.empty:
-                    push_log(f"⚠️ No data returned for {symbol}, skipping.", "warning")
+                    logger_util.push_log(f"⚠️ No data returned for {symbol}, skipping.", "warning")
                     continue
 
-                push_log(f"✅ Data ready for {symbol}")
+                logger_util.push_log(f"✅ Data ready for {symbol}")
                 indicators_df = ind.all_indicators(combined_df, strategy)
                 row = indicators_df.tail(1).iloc[0]
 
                 # Logging summary row
                 cols = indicators_df.columns.tolist()
                 formatted = " | ".join([f"{c}:{row[c]}" for c in cols])
-                push_log(f"📊 Indicators: {formatted}")
+                logger_util.push_log(f"📊 Indicators: {formatted}")
 
                 # STEP 4: Check trade conditions
                 try:
@@ -309,16 +314,16 @@ def run_trading_logic_for_all(trading_parameters, selected_brokers):
                         fp.fivepaisa_trade_conditions_check(lots, target_pct, indicators_df, creds, stock, strategy)
 
                 except Exception as e:
-                    push_log(f"❌ Error executing trade for {symbol}: {e}", "error")
+                    logger_util.push_log(f"❌ Error executing trade for {symbol}: {e}", "error")
 
                 del combined_df
                 del indicators_df
                 gc.collect()
 
-            push_log(f"✅ Trading cycle completed at {now_interval}")
-            push_log(f"⏳ Waiting for next interval at {next_interval}...")
+            logger_util.push_log(f"✅ Trading cycle completed at {now_interval}")
+            logger_util.push_log(f"⏳ Waiting for next interval at {next_interval}...")
             # No time.sleep — wait naturally until interval updates
             gsleep(1)
 
-    push_log("🏁 All active trades ended. Exiting trading loop.")
+    logger_util.push_log("🏁 All active trades ended. Exiting trading loop.")
     gc.collect()

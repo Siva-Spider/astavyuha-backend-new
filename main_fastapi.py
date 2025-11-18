@@ -1,34 +1,35 @@
 # main_fastapi.py
 from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import WebSocket, WebSocketDisconnect
+import backend.logger_util as logger_util
+#from backend.logger_util import websocket_connections, logger_util.push_log, get_log_buffer
 from fastapi.middleware.wsgi import WSGIMiddleware
 from pydantic import BaseModel
 import sqlite3
 import os
-import time
-import asyncio
-
 # --- Additional Imports (if not already in main_fastapi.py) ---
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pathlib import Path
-import get_lot_size as ls
-from upstox_instrument_manager import update_instrument_file
-import get_expiry_date as ed
-import find_positions_with_symbol as fps
-import user_manager as usr
+from backend import get_lot_size as ls
+from backend.upstox_instrument_manager import update_instrument_file
+from backend import get_expiry_date as ed
+from backend import find_positions_with_symbol as fps
+from backend import user_manager as usr
 import threading, json, asyncio
 from queue import Queue, Empty
-import Upstox as us
+from backend import Upstox as us
 
 # Import helpers used in many endpoints
-from update_db import init_db
-from password_utils import generate_random_password
-from email_utils import send_email
-from logger_util import push_log, get_log_buffer
+from backend.update_db import init_db
+from backend.password_utils import generate_random_password
+from backend.email_utils import send_email
 from fastapi import Request
 import queue
 import redis, json, time, asyncio, threading, queue
-
+import ssl
+from urllib.parse import urlparse
+ # re-use the same module that has websocket_connections
 
 # Existing broker map
 broker_map = {
@@ -40,6 +41,7 @@ broker_map = {
 }
 
 broker_sessions = {}
+event_loop = None
 DATA_DIR = Path("data")
 LATEST_LINK_FILENAME = "complete.csv.gz"
 
@@ -49,11 +51,7 @@ try:
 except Exception:
     celery_app = None
 # Import the task (tasks/trading_tasks.py should define start_trading_loop)
-try:
-    from tasks.trading_tasks import start_trading_loop
-except Exception:
-    # task may not exist yet — handle gracefully
-    start_trading_loop = None
+from backend.tasks.trading_tasks import start_trading_loop
 
 # Create FastAPI app
 app = FastAPI(title="Astavyuha Backend (FastAPI wrapper)", version="1.0.0")
@@ -67,15 +65,141 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ensure DB initialized at startup
+# --- insert in main_fastapi.py (after app = FastAPI()) ---
+
+REDIS_URL = os.getenv("REDIS_URL", "").strip() or "redis://localhost:6379"
+REDIS_PUBSUB_CHANNEL = "log_stream"
+
+# Thread control
+_redis_thread = None
+_redis_thread_stop = threading.Event()
+
+def _redis_listener_thread(redis_url, channel):
+    """
+    Blocking thread which polls Redis PubSub and forwards published logs
+    to FastAPI WebSocket clients using logger_util.push_ws().
+    """
+    try:
+        parsed = urlparse(redis_url)
+        if parsed.scheme == "rediss":
+            r = redis.StrictRedis.from_url(redis_url, ssl_cert_reqs=None, decode_responses=True)
+        else:
+            r = redis.StrictRedis.from_url(redis_url, decode_responses=True)
+
+        pubsub = r.pubsub(ignore_subscribe_messages=True)
+        pubsub.subscribe(channel)
+
+        print(f"✅ Redis listener thread subscribed to: {channel}")
+
+    except Exception as e:
+        print("⚠️ Redis listener failed to start:", e)
+        return
+
+    # Poll-loop
+    while not _redis_thread_stop.is_set():
+        try:
+            message = pubsub.get_message(timeout=1)
+
+            if message and message.get("type") == "message":
+                data = message.get("data")
+
+                # Convert bytes → string
+                if isinstance(data, bytes):
+                    try:
+                        data = data.decode("utf-8")
+                    except:
+                        data = str(data)
+
+                # Validate JSON
+                try:
+                    payload = json.loads(data)
+                    entry_json = json.dumps(payload)
+                except:
+                    entry_json = data if isinstance(data, str) else json.dumps({"message": str(data)})
+
+                # 🔥 Forward message to WebSocket clients
+                try:
+                    import backend.logger_util as logger_util
+                    logger_util.push_ws(entry_json)
+                except Exception as e:
+                    print("⚠️ Failed to push WS log from Redis listener:", e)
+
+        except Exception as e:
+            print("⚠️ Redis listener error:", e)
+            time.sleep(0.5)
+
+    try:
+        pubsub.close()
+    except:
+        pass
+
+    print("🧹 Redis listener thread stopped.")
+
+"""async def _broadcast_to_websockets(entry_json: str):
+    print("📤 Broadcast function triggered with:", entry_json)
+
+    connected = len(logger_util.websocket_connections)
+    print(logger_util.websocket_connections)
+    print("🔍 WebSockets connected:", connected)
+
+    if connected == 0:
+        print("❌ No WebSocket clients to send to")
+        return
+
+    dead = []
+    sent_count = 0
+
+    for ws in list(logger_util.websocket_connections):
+        try:
+            await ws.send_text(entry_json)
+            sent_count += 1
+        except Exception as e:
+            print("⚠️ WebSocket send failed:", e)
+            dead.append(ws)
+
+    for ws in dead:
+        logger_util.websocket_connections.discard(ws)
+
+    print(f"📣 Sent to {sent_count} websocket clients.")"""
+
+@app.on_event("startup")
+async def start_redis_listener():
+    print("🔥 FastAPI startup running...")
+
+    # 1️⃣ Store the uvicorn event loop inside logger_util
+    try:
+        import backend.logger_util as logger_util
+        logger_util.event_loop = asyncio.get_running_loop()
+        print("✅ Stored FastAPI event_loop inside logger_util.event_loop")
+    except Exception as e:
+        print("❌ Failed to set logger_util.event_loop:", e)
+    global _redis_thread, _redis_thread_stop
+    # try to set event_loop inside logger_util for other code sanity
+    try:
+        logger_util.event_loop = asyncio.get_running_loop()
+    except Exception:
+        pass
+
+    if _redis_thread is None or not _redis_thread.is_alive():
+        _redis_thread_stop.clear()
+        _redis_thread = threading.Thread(target=_redis_listener_thread, args=(REDIS_URL, REDIS_PUBSUB_CHANNEL), daemon=True)
+        _redis_thread.start()
+        print("✅ Started Redis → WebSocket listener thread.")
+
 @app.on_event("startup")
 async def startup_event():
-    # initialize DB if needed (update_db.init_db uses the same DB)
-    try:
-        init_db()
-        push_log("🚀 FastAPI server started (wrapper).")
-    except Exception as e:
-        push_log(f"⚠️ init_db failed on startup: {e}", "error")
+    print("🔥 FASTAPI STARTUP")
+    loop = asyncio.get_running_loop()
+    print(loop)
+    logger_util.event_loop = loop
+    print("🔥 logger_util.event_loop SET to:", logger_util.event_loop)
+
+
+@app.on_event("shutdown")
+async def stop_redis_listener():
+    global _redis_thread_stop
+    _redis_thread_stop.set()
+    print("🛑 Stopping Redis listener thread...")
 
 # ---------- Pydantic models to match front-end payloads ----------
 class LoginRequest(BaseModel):
@@ -131,14 +255,14 @@ async def login_user(data: LoginRequest):
         row = get_user_row_by_userid(data.userId)
         if not row:
             # not found
-            push_log(f"⚠️ Login attempt failed: user {data.userId} not found")
+            logger_util.push_log(f"⚠️ Login attempt failed: user {data.userId} not found")
             return {"success": False, "message": "Invalid User ID"}
 
         db_userId, db_password, db_role, db_email, db_mobile, db_username = row
         # Note: your DB stores password in plaintext (per your earlier files). If you use hashing,
         # change this compare accordingly.
         if db_password != data.password:
-            push_log(f"⚠️ Incorrect password for user {data.userId}")
+            logger_util.push_log(f"⚠️ Incorrect password for user {data.userId}")
             return {"success": False, "message": "Incorrect password"}
 
         # Optional role match if provided
@@ -148,7 +272,7 @@ async def login_user(data: LoginRequest):
             if normalized_role == "client":
                 normalized_role = "user"
             if normalized_role != db_normalized_role:
-                push_log(f"⚠️ Role mismatch: provided {data.role}, db {db_role}")
+                logger_util.push_log(f"⚠️ Role mismatch: provided {data.role}, db {db_role}")
                 return {"success": False, "message": "Role mismatch"}
 
         profile = {
@@ -158,11 +282,11 @@ async def login_user(data: LoginRequest):
             "mobilenumber": db_mobile or "",
             "role": db_role,
         }
-        push_log(f"✅ User {data.userId} logged in as {db_role}")
+        logger_util.push_log(f"✅ User {data.userId} logged in as {db_role}")
         return {"success": True, "message": "Login successful", "profile": profile}
 
     except Exception as e:
-        push_log(f"❌ Login error: {e}", "error")
+        logger_util.push_log(f"❌ Login error: {e}", "error")
         return {"success": False, "message": str(e)}
 
 
@@ -229,9 +353,9 @@ async def register_user_route(data: RegisterRequest):
                 f"Requested Role: {role}\n\nRegards,\nAstavyuha Team"
             )
         except Exception as mail_err:
-            push_log(f"⚠️ Pending user email failed for {data.email}: {mail_err}")
+            logger_util.push_log(f"⚠️ Pending user email failed for {data.email}: {mail_err}")
 
-        push_log(f"🕓 New pending registration: {user_id_candidate} ({role})")
+        logger_util.push_log(f"🕓 New pending registration: {user_id_candidate} ({role})")
 
         return {
             "success": True,
@@ -246,7 +370,7 @@ async def register_user_route(data: RegisterRequest):
         }
 
     except Exception as e:
-        push_log(f"❌ Error in pending registration: {e}", "error")
+        logger_util.push_log(f"❌ Error in pending registration: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 async def async_gsleep(seconds: float):
@@ -295,7 +419,7 @@ async def get_profit_loss(request: Request):
 
         # ✅ Log success
         try:
-            push_log(f"✅ Profit/Loss fetched successfully for Upstox {segment} FY{fy_code}")
+            logger_util.push_log(f"✅ Profit/Loss fetched successfully for Upstox {segment} FY{fy_code}")
         except Exception as log_err:
             print("Logging suppressed:", log_err)
 
@@ -304,60 +428,11 @@ async def get_profit_loss(request: Request):
     except Exception as e:
         # 🔒 Prevent recursive logging errors
         try:
-            push_log(f"❌ Error in /api/get_profit_loss: {e}", "error")
+            logger_util.push_log(f"❌ Error in /api/get_profit_loss: {e}", "error")
         except Exception as log_err:
             print("Logging suppressed:", log_err)
 
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/stream-logs")
-async def stream_logs(request: Request):
-    """
-    Real-time Server-Sent Events stream of logs via Redis Pub/Sub.
-    Falls back to in-memory buffer if Redis unavailable.
-    """
-    import redis
-    import json
-    import asyncio
-
-    try:
-        redis_client = redis.StrictRedis(host="localhost", port=6379, db=5, decode_responses=True)
-        redis_client.ping()
-        pubsub = redis_client.pubsub()
-        pubsub.subscribe("live_logs")
-        USE_REDIS = True
-        print("📡 Using Redis Pub/Sub for live log streaming.")
-    except Exception as e:
-        print(f"⚠️ Redis Pub/Sub unavailable ({e}), using in-memory fallback.")
-        USE_REDIS = False
-        pubsub = None
-
-    async def redis_stream():
-        while True:
-            message = pubsub.get_message(ignore_subscribe_messages=True, timeout=1)
-            if message:
-                try:
-                    data = json.loads(message["data"])
-                    yield f"data: {json.dumps(data)}\n\n"
-                except Exception as e:
-                    yield f'data: {{"type":"log","level":"ERROR","message":"Invalid Redis log: {str(e)}"}}\n\n'
-            await asyncio.sleep(0.1)
-
-    async def memory_stream():
-        from logger_util import get_log_buffer
-        last_len = 0
-        while True:
-            logs = get_log_buffer()
-            if len(logs) > last_len:
-                for log in logs[last_len:]:
-                    yield f"data: {json.dumps(log)}\n\n"
-                last_len = len(logs)
-            await asyncio.sleep(0.5)
-
-    return StreamingResponse(
-        redis_stream() if USE_REDIS else memory_stream(),
-        media_type="text/event-stream",
-    )
 
 @app.post("/api/start-all-trading")
 async def start_trading(request: Request):
@@ -372,16 +447,16 @@ async def start_trading(request: Request):
 
         # Save everything as it is
         config_file.write_text(json.dumps(data, indent=2))
-        push_log("💾 Saved unified trading configuration to trading_config.json")
+        logger_util.push_log("💾 Saved unified trading configuration to trading_config.json")
 
         # Trigger Celery background trading task
         task = start_trading_loop.apply_async()
-        push_log(f"🟢 Celery task {task.id} started for trading loop.")
+        logger_util.push_log(f"🟢 Celery task {task.id} started for trading loop.")
 
         return {"success": True, "message": "Trading loop started.", "task_id": task.id}
 
     except Exception as e:
-        push_log(f"❌ Could not start trading task: {e}", "error")
+        logger_util.push_log(f"❌ Could not start trading task: {e}", "error")
         return {"success": False, "message": str(e)}
 
 
@@ -420,7 +495,7 @@ async def get_all_users(user_role: str = Query(..., description="Pass user_role=
         ]
         return {"success": True, "users": users}
     except Exception as e:
-        push_log(f"❌ Error fetching users: {e}", "error")
+        logger_util.push_log(f"❌ Error fetching users: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -433,10 +508,10 @@ async def delete_user(userId: str, user_role: str = Query(..., description="Pass
         cursor.execute("DELETE FROM users WHERE userId = ?", (userId,))
         conn.commit()
         conn.close()
-        push_log(f"🗑️ User {userId} deleted by admin")
+        logger_util.push_log(f"🗑️ User {userId} deleted by admin")
         return {"success": True, "message": f"User {userId} deleted successfully"}
     except Exception as e:
-        push_log(f"❌ Error deleting user: {e}", "error")
+        logger_util.push_log(f"❌ Error deleting user: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -449,10 +524,10 @@ async def update_user_role(userId: str, new_role: str = Query(...), user_role: s
         cursor.execute("UPDATE users SET role = ? WHERE userId = ?", (new_role, userId))
         conn.commit()
         conn.close()
-        push_log(f"🧩 Admin updated role for {userId} to {new_role}")
+        logger_util.push_log(f"🧩 Admin updated role for {userId} to {new_role}")
         return {"success": True, "message": f"Role for {userId} updated to {new_role}"}
     except Exception as e:
-        push_log(f"❌ Error updating role: {e}", "error")
+        logger_util.push_log(f"❌ Error updating role: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -477,7 +552,7 @@ async def get_admin_summary(user_role: str = Query(...)):
             },
         }
     except Exception as e:
-        push_log(f"❌ Error fetching summary: {e}", "error")
+        logger_util.push_log(f"❌ Error fetching summary: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -485,10 +560,10 @@ async def get_admin_summary(user_role: str = Query(...)):
 async def get_admin_logs(user_role: str = Query(...)):
     admin_role_check(user_role)
     try:
-        logs = get_log_buffer()
+        logs = logger_util.get_log_buffer()
         return {"success": True, "logs": logs[-200:]}
     except Exception as e:
-        push_log(f"❌ Error fetching logs: {e}", "error")
+        logger_util.push_log(f"❌ Error fetching logs: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/instruments/latest")
@@ -512,7 +587,7 @@ async def get_latest_instruments():
             media_type="application/gzip"
         )
     except Exception as e:
-        push_log(f"❌ Error serving instrument file: {e}", "error")
+        logger_util.push_log(f"❌ Error serving instrument file: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/connect-broker")
@@ -521,11 +596,11 @@ async def connect_broker(request: Request):
     Connects to selected brokers using credentials.
     """
     try:
-        import Upstox as us
-        import Zerodha as zr
-        import Groww as gr
-        import Fivepaisa as fp
-        import AngelOne as ar
+        from backend import Upstox as us
+        from backend import Zerodha as zr
+        from backend import Groww as gr
+        from backend import Fivepaisa as fp
+        from backend import AngelOne as ar
 
         data = await request.json()
         brokers_data = data.get("brokers", [])
@@ -605,7 +680,7 @@ async def connect_broker(request: Request):
 
             except Exception as e:
                 status, message = "failed", f"An error occurred: {str(e)}"
-                push_log(message, "error")
+                logger_util.push_log(message, "error")
 
             responses.append({
                 "broker": broker_name,
@@ -622,7 +697,7 @@ async def connect_broker(request: Request):
 
         return JSONResponse(content=responses)
     except Exception as e:
-        push_log(f"❌ Error in connect_broker: {e}", "error")
+        logger_util.push_log(f"❌ Error in connect_broker: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/get-lot-size")
@@ -652,7 +727,7 @@ async def get_lot_size_post(request: Request):
             return JSONResponse(status_code=404, content={"message": "Lot size not found."})
     except Exception as e:
         msg = f"Error in get_lot_size (POST): {e}"
-        push_log(msg, "error")
+        logger_util.push_log(msg, "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/expiry")
@@ -666,7 +741,7 @@ async def get_expiry(symbol: str = Query(...)):
             raise HTTPException(status_code=404, detail="No expiry dates found.")
         return {"symbol": symbol, "expiries": expiries}
     except Exception as e:
-        push_log(f"❌ Error in get_expiry: {e}", "error")
+        logger_util.push_log(f"❌ Error in get_expiry: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/users")
@@ -713,7 +788,7 @@ async def unified_users_list():
         conn.close()
         return {"users": registered, "pending": pending, "rejected": rejected}
     except Exception as e:
-        push_log(f"❌ unified_users_list error: {e}", "error")
+        logger_util.push_log(f"❌ unified_users_list error: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -740,10 +815,10 @@ async def approve_user(userId: str):
         cursor.execute("DELETE FROM pending_users WHERE userId=?", (userId,))
         conn.commit()
         conn.close()
-        push_log(f"✅ Approved pending user {userId}")
+        logger_util.push_log(f"✅ Approved pending user {userId}")
         return {"success": True, "message": f"User {userId} approved"}
     except Exception as e:
-        push_log(f"❌ Error approving user {userId}: {e}", "error")
+        logger_util.push_log(f"❌ Error approving user {userId}: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -778,10 +853,10 @@ async def reject_user(userId: str):
         cursor.execute("DELETE FROM pending_users WHERE userId=?", (userId,))
         conn.commit()
         conn.close()
-        push_log(f"🚫 Rejected pending user {userId}")
+        logger_util.push_log(f"🚫 Rejected pending user {userId}")
         return {"success": True, "message": f"User {userId} rejected"}
     except Exception as e:
-        push_log(f"❌ Error rejecting user {userId}: {e}", "error")
+        logger_util.push_log(f"❌ Error rejecting user {userId}: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -796,10 +871,10 @@ async def delete_registered_user(userId: str):
         cursor.execute("DELETE FROM users WHERE userId=?", (userId,))
         conn.commit()
         conn.close()
-        push_log(f"🗑️ Deleted registered user {userId}")
+        logger_util.push_log(f"🗑️ Deleted registered user {userId}")
         return {"success": True, "message": f"User {userId} deleted successfully"}
     except Exception as e:
-        push_log(f"❌ Error deleting user {userId}: {e}", "error")
+        logger_util.push_log(f"❌ Error deleting user {userId}: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -814,10 +889,10 @@ async def delete_rejected_user(userId: str):
         cursor.execute("DELETE FROM rejected_users WHERE userId=?", (userId,))
         conn.commit()
         conn.close()
-        push_log(f"🗑️ Deleted rejected user {userId}")
+        logger_util.push_log(f"🗑️ Deleted rejected user {userId}")
         return {"success": True, "message": f"Rejected user {userId} deleted successfully"}
     except Exception as e:
-        push_log(f"❌ Error deleting rejected user {userId}: {e}", "error")
+        logger_util.push_log(f"❌ Error deleting rejected user {userId}: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -833,10 +908,10 @@ async def reset_user_password(userId: str):
         cursor.execute("UPDATE users SET password=? WHERE userId=?", (new_pass, userId))
         conn.commit()
         conn.close()
-        push_log(f"🔑 Password reset for {userId}")
+        logger_util.push_log(f"🔑 Password reset for {userId}")
         return {"success": True, "message": "Password reset successfully", "new_password": new_pass}
     except Exception as e:
-        push_log(f"❌ Error resetting password for {userId}: {e}", "error")
+        logger_util.push_log(f"❌ Error resetting password for {userId}: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/pending-users")
@@ -864,7 +939,7 @@ async def get_pending_users():
         return {"pending_users": users_data}
 
     except Exception as e:
-        push_log(f"❌ Error fetching pending users: {e}", "error")
+        logger_util.push_log(f"❌ Error fetching pending users: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/registered-users")
@@ -892,7 +967,7 @@ async def get_registered_users():
         return {"registered_users": users_data}
 
     except Exception as e:
-        push_log(f"❌ Error fetching registered users: {e}", "error")
+        logger_util.push_log(f"❌ Error fetching registered users: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/get-positions")
@@ -913,7 +988,7 @@ async def get_positions(request: Request):
         return {"broker": broker, "symbol": symbol, "positions": positions}
 
     except Exception as e:
-        push_log(f"❌ Error in /api/get-positions: {e}", "error")
+        logger_util.push_log(f"❌ Error in /api/get-positions: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/disconnect-stock")
@@ -933,8 +1008,7 @@ async def disconnect_stock(request: Request):
         r = redis.StrictRedis(host="localhost", port=6379, db=5, decode_responses=True)
         removed = r.srem("active_trades", symbol)
         if removed:
-            from logger_util import push_log
-            push_log(f"🛑 User disconnected {symbol} — stopping trade after current interval.")
+            logger_util.push_log(f"🛑 User disconnected {symbol} — stopping trade after current interval.")
             return {"success": True, "message": f"{symbol} disconnected."}
         else:
             return {"success": False, "message": f"{symbol} was not active."}
@@ -957,11 +1031,11 @@ async def close_position(request: Request):
             raise HTTPException(status_code=400, detail="Missing broker or symbol.")
 
         # You can call the respective broker close position logic here.
-        push_log(f"🔻 Closed position for {symbol} ({broker})")
+        logger_util.push_log(f"🔻 Closed position for {symbol} ({broker})")
         return {"message": f"Closed position for {symbol} ({broker})"}
 
     except Exception as e:
-        push_log(f"❌ Error closing position: {e}", "error")
+        logger_util.push_log(f"❌ Error closing position: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/close-all-positions")
@@ -980,7 +1054,7 @@ async def close_all_positions(request: Request):
 
             try:
                 # For each broker, you can call their close_all_positions() function
-                push_log(f"🔻 Closing all positions for {broker}")
+                logger_util.push_log(f"🔻 Closing all positions for {broker}")
                 summary.append({
                     "broker": broker,
                     "status": "success",
@@ -996,6 +1070,27 @@ async def close_all_positions(request: Request):
         return {"summary": summary}
 
     except Exception as e:
-        push_log(f"❌ Error in /api/close-all-positions: {e}", "error")
+        logger_util.push_log(f"❌ Error in /api/close-all-positions: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.websocket("/ws/logs")
+async def websocket_logs(websocket: WebSocket):
+    print("⚡ Client trying to connect...")
+    await websocket.accept()
+    print("⚡ Client accepted. Adding to pool...")
+
+    logger_util.websocket_connections.add(websocket)
+    print(f"⚡ Total WS clients after add: {len(logger_util.websocket_connections)}")
+
+    logger_util.push_log("📡 WebSocket client connected.")
+
+    try:
+        # Keep alive — DO NOT use receive_text()
+        while True:
+            await asyncio.sleep(1)
+    except:
+        print("🔥 WS DISCONNECTED")
+        logger_util.websocket_connections.discard(websocket)
+        print(f"⚡ Total WS clients after remove: {len(logger_util.websocket_connections)}")
+
 

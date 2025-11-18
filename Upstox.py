@@ -7,16 +7,16 @@ import datetime
 import calendar
 import pytz
 from tabulate import tabulate
-import Next_Now_intervals
-from logger_util import push_log
+from backend import Next_Now_intervals
+import backend.logger_util as logger_util
 import logging
 
 """logger = logging.getLogger(__name__)
 
 def _ui_log(message, level="info"):
     try:
-        from logger_util import push_log  # local import
-        push_log(message, level)  # ✅ correct call
+        from logger_util import logger_util.push_log  # local import
+        logger_util.push_log(message, level)  # ✅ correct call
     except Exception as e:
         logger.debug(f"⚠️ Logging suppressed: {e}", exc_info=True)"""
 
@@ -42,7 +42,7 @@ def upstox_trade_history(access_token, segment,  start_date, end_date):
         data = response.json().get('data')
         return data
     else:
-        push_log(f"Error: {response.status_code} - {response.text}", "error")
+        logger_util.push_log(f"Error: {response.status_code} - {response.text}", "error")
 
 def upstox_profit_loss(access_token, segment, from_date, to_date, year):
     # --- Fetch profit/loss data ---
@@ -77,7 +77,7 @@ def upstox_profit_loss(access_token, segment, from_date, to_date, year):
     # ✅ Handle None or missing structure gracefully
     cb = (data_charges or {}).get("charges_breakdown", {})
     if not cb:
-        push_log("⚠️ No charges breakdown data available.", "warning")
+        logger_util.push_log("⚠️ No charges breakdown data available.", "warning")
         return data, []
 
     # --- Flatten dynamically ---
@@ -101,7 +101,7 @@ def upstox_profile(access_token):
     }
     try:
         response = requests.get(url, headers=headers)
-        push_log(f"Status Code: {response.status_code}")
+        logger_util.push_log(f"Status Code: {response.status_code}")
 
         if response.status_code == 200:
             response_data = response.json()
@@ -113,13 +113,13 @@ def upstox_profile(access_token):
                            'Email':response_data.get('data')['email']}
                 return profile
             else:
-                push_log("⚠️ Failed to retrieve balance: Invalid response structure", "warning")
+                logger_util.push_log("⚠️ Failed to retrieve balance: Invalid response structure", "warning")
                 return None
         else:
-            push_log(f"🚨 API Error {response.status_code}: {response.text}", "error")
+            logger_util.push_log(f"🚨 API Error {response.status_code}: {response.text}", "error")
             return None
     except Exception as e:
-        push_log(f"🚨 Exception in profile function: {e}", "error")
+        logger_util.push_log(f"🚨 Exception in profile function: {e}", "error")
     return None
 
 def upstox_balance(access_token):
@@ -131,24 +131,24 @@ def upstox_balance(access_token):
 
     try:
         response = requests.get(url, headers=headers)
-        #push_log(f"Status Code: {response.status_code}")
+        #logger_util.push_log(f"Status Code: {response.status_code}")
 
         if response.status_code == 200:
             response_data = response.json()
             # Extract available_margin from equity section
             if response_data.get('status') == 'success' and 'data' in response_data:
-                #push_log(response_data['data']['equity'])
+                #logger_util.push_log(response_data['data']['equity'])
                 total_balance = response_data['data']['equity']['available_margin'] + response_data['data']['equity']['used_margin']
                 balance = {"Total Balance":total_balance, "Available Margin":response_data['data']['equity']['available_margin'],"Used Margin":response_data['data']['equity']['used_margin']}
                 return balance
             else:
-                push_log("⚠️ Failed to retrieve balance: Invalid response structure", "warning")
+                logger_util.push_log("⚠️ Failed to retrieve balance: Invalid response structure", "warning")
                 return None
         else:
-            push_log(f"🚨 API Error {response.status_code}: {response.text}", "error")
+            logger_util.push_log(f"🚨 API Error {response.status_code}: {response.text}", "error")
             return None
     except Exception as e:
-        push_log(f"🚨 Exception in balance function: {e}", "error")
+        logger_util.push_log(f"🚨 Exception in balance function: {e}", "error")
         return None
 
 def upstox_equity_instrument_key(name):
@@ -170,14 +170,14 @@ def upstox_equity_instrument_key(name):
         ]
 
     if filtered.empty:
-        push_log("❌ No matching option instrument found", "error")
+        logger_util.push_log("❌ No matching option instrument found", "error")
         return
 
     if not filtered.empty:
         instrument_key = filtered.iloc[0]['instrument_key']
         return instrument_key
     else:
-        push_log("❌ No matching option instrument found", "error")
+        logger_util.push_log("❌ No matching option instrument found", "error")
         return
 
 def upstox_fetch_historical_data_with_retry(access_token, instrument_key, interval):
@@ -186,7 +186,7 @@ def upstox_fetch_historical_data_with_retry(access_token, instrument_key, interv
     end_date = (today - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
     start = today - datetime.timedelta(days=25)
     start_date = start.strftime('%Y-%m-%d')
-    push_log(instrument_key)
+    logger_util.push_log(instrument_key)
 
     url = f"https://api.upstox.com/v3/historical-candle/{instrument_key}/minutes/{interval}/{end_date}/{start_date}"
     headers = {
@@ -209,15 +209,15 @@ def upstox_fetch_historical_data_with_retry(access_token, instrument_key, interv
             df.drop(['oi'], axis=1, inplace=True)
 
             df['5ema'] = df['close'].ewm(span=5, adjust=False).mean()
-            push_log(f"✅ Fetched historical data form: {start_date}")
+            logger_util.push_log(f"✅ Fetched historical data form: {start_date}")
             return df
 
         else:
-            push_log(f"⚠️ No data on {start_date} (market holiday or no trades). Trying earlier day...", "warning")
+            logger_util.push_log(f"⚠️ No data on {start_date} (market holiday or no trades). Trying earlier day...", "warning")
     else:
-        push_log(f"❌ Failed to fetch data for {start_date}. HTTP {response.status_code} and {response.json()}. Retrying...", "error")
+        logger_util.push_log(f"❌ Failed to fetch data for {start_date}. HTTP {response.status_code} and {response.json()}. Retrying...", "error")
 
-    push_log(f"❗Could not fetch historical data for {instrument_key} from 25 days.", "error")
+    logger_util.push_log(f"❗Could not fetch historical data for {instrument_key} from 25 days.", "error")
     return pd.DataFrame()
 
 def upstox_fetch_intraday_data(access_token, instrument_key, interval):
@@ -252,18 +252,18 @@ def upstox_fetch_intraday_data(access_token, instrument_key, interval):
                     if not completed_df.empty:
                         return completed_df
                     else:
-                        push_log(f"⏳ Waiting for complete candle data... Retry in {sleep_interval}s")
+                        logger_util.push_log(f"⏳ Waiting for complete candle data... Retry in {sleep_interval}s")
                 else:
-                    push_log("⚠️ No candle data found in response.", "warning")
+                    logger_util.push_log("⚠️ No candle data found in response.", "warning")
             else:
-                push_log(f"🚨 API Error {response.status_code}: {response.text}", "error")
+                logger_util.push_log(f"🚨 API Error {response.status_code}: {response.text}", "error")
         except Exception as e:
-            push_log(f"🚨 Exception in fetch_intraday_data: {e}", "error")
+            logger_util.push_log(f"🚨 Exception in fetch_intraday_data: {e}", "error")
 
         time.sleep(sleep_interval)
         waited += sleep_interval
 
-    push_log("❌ Failed to fetch complete candle data within 30 seconds.", "error")
+    logger_util.push_log("❌ Failed to fetch complete candle data within 30 seconds.", "error")
     return None
 
 def upstox_fetch_positions(access_token):
@@ -277,7 +277,7 @@ def upstox_fetch_positions(access_token):
     if response.status_code == 200:
         positions = response.json().get('data', [])
         return positions
-    push_log(f"Failed to fetch positions: {response.text}", "error")
+    logger_util.push_log(f"Failed to fetch positions: {response.text}", "error")
     return []
 
 
@@ -319,14 +319,14 @@ def upstox_ohlc_data_fetch(access_token, instrument_key):
                     }
 
                 except KeyError as e:
-                    push_log(f"OHLC KeyError in response: {e}", "error")
+                    logger_util.push_log(f"OHLC KeyError in response: {e}", "error")
                     return None
             else:
-                push_log("OHLC Error:, {response.status_code}, {response.text}", "error")
+                logger_util.push_log("OHLC Error:, {response.status_code}, {response.text}", "error")
                 time.sleep(2)
                 return None
         except requests.exceptions.RequestException as e:
-            push_log(f"🔌 OHLC Network error (attempt {attempt}/{retries}): {e}", "error")
+            logger_util.push_log(f"🔌 OHLC Network error (attempt {attempt}/{retries}): {e}", "error")
 
         time.sleep(1)
 
@@ -354,11 +354,11 @@ def upstox_live_option_Value(access_token, instrument_key):
             if close_price is not None:
                 return close_price
             else:
-                push_log(f"Close price not available for {token}.", "warning")
+                logger_util.push_log(f"Close price not available for {token}.", "warning")
         else:
-            push_log("No data field in response.", "warning")
+            logger_util.push_log("No data field in response.", "warning")
     else:
-        push_log(f"Request failed with status code: {response.status_code}", "error")
+        logger_util.push_log(f"Request failed with status code: {response.status_code}", "error")
 
 def upstox_close_position(credentials, pos):
     access_token = credentials['access_token']
@@ -392,12 +392,12 @@ def upstox_close_position(credentials, pos):
         response = requests.post(url, json=data, headers=headers)
 
         if response.status_code == 200:
-            push_log("Position closed successfully")
+            logger_util.push_log("Position closed successfully")
         else:
-            push_log(f"Order placed not successful. The response code is : {response.status_code}", "warning")
+            logger_util.push_log(f"Order placed not successful. The response code is : {response.status_code}", "warning")
     except Exception as e:
         # Handle exceptions
-        push_log(f'Error: {str(e)}', "error")
+        logger_util.push_log(f'Error: {str(e)}', "error")
 
 def upstox_place_order_single(access_token, instrument_token, quantity, transaction_type,price):
 
@@ -436,16 +436,16 @@ def upstox_place_order_single(access_token, instrument_token, quantity, transact
 
         if response.status_code == 200:
             if transaction_type == "BUY":
-                push_log("order placed successfully")
+                logger_util.push_log("order placed successfully")
             elif transaction_type == "SELL":
-                push_log("Old option position closed successfully")
+                logger_util.push_log("Old option position closed successfully")
         else:
-            push_log(f"Order placed not successful. The response code is : {response.status_code}", "warning")
+            logger_util.push_log(f"Order placed not successful. The response code is : {response.status_code}", "warning")
 
 
     except Exception as e:
         # Handle exceptions
-        push_log(f'Error: {str(e)}', "error")
+        logger_util.push_log(f'Error: {str(e)}', "error")
 
 def upstox_gtt_place_order(access_token, instrument_key, quantity, transaction_type, entry,tgt):
     try:
@@ -482,12 +482,12 @@ def upstox_gtt_place_order(access_token, instrument_key, quantity, transaction_t
             })
         res = requests.post(url, headers=headers, json=payload)
         if res.status_code == 200:
-            push_log("✅ GTT order placed successfully.")
+            logger_util.push_log("✅ GTT order placed successfully.")
             return res.status_code
         else:
-            push_log(f"❌ GTT order placement failed: {res.text}", "error")
+            logger_util.push_log(f"❌ GTT order placement failed: {res.text}", "error")
     except Exception as e:
-        push_log(f"❌ Error placing GTT order: {e}", "error")
+        logger_util.push_log(f"❌ Error placing GTT order: {e}", "error")
 def upstox_commodity_instrument_key(name, symbol, close_price, option_type):
     # Load instrument data
     instruments = pd.read_csv("https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz")
@@ -502,7 +502,7 @@ def upstox_commodity_instrument_key(name, symbol, close_price, option_type):
     ].copy()
 
     if filtered.empty:
-        push_log(f"❌ No OPTFUT contracts found for {name}", "error")
+        logger_util.push_log(f"❌ No OPTFUT contracts found for {name}", "error")
         return pd.DataFrame()
 
     # Ensure strike is numeric
@@ -521,7 +521,7 @@ def upstox_commodity_instrument_key(name, symbol, close_price, option_type):
     filtered = filtered[filtered['symbol_prefix'] == symbol]
 
     if filtered.empty:
-        push_log(f"⚠️ No instruments matched with symbol prefix '{symbol}'", "warning")
+        logger_util.push_log(f"⚠️ No instruments matched with symbol prefix '{symbol}'", "warning")
         return pd.DataFrame()
 
     # Find nearest strike above and below
@@ -536,7 +536,7 @@ def upstox_commodity_instrument_key(name, symbol, close_price, option_type):
     elif pd.notna(below_strike):
         nearest_strike = below_strike
     else:
-        push_log(f"⚠️ No nearby strikes found for {name} near price {close_price}", "warning")
+        logger_util.push_log(f"⚠️ No nearby strikes found for {name} near price {close_price}", "warning")
         return pd.DataFrame()
 
     # Get all rows for that nearest strike
@@ -546,7 +546,7 @@ def upstox_commodity_instrument_key(name, symbol, close_price, option_type):
     nearest_expiry = nearest_rows['expiry'].min()
     nearest_rows = nearest_rows[nearest_rows['expiry'] == nearest_expiry]
 
-    # Sort and push_log neatly
+    # Sort and logger_util.push_log neatly
     nearest_rows = nearest_rows.sort_values(by=['expiry', 'strike'])
     instrument_key = nearest_rows['instrument_key']
     return instrument_key.iloc[0]
@@ -556,8 +556,8 @@ def upstox_equity_option_instrument_key( stock,symbol, spot_value, option_type):
     instruments = pd.read_csv("https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz")
     indices = {"NIFTY": "Nifty 50", "BANKNIFTY": "Nifty Bank", "FINNIFTY": "Nifty Fin Service",
                "MIDCPNIFTY": "NIFTY MID SELECT"}
-    push_log(stock)
-    push_log(symbol)
+    logger_util.push_log(stock)
+    logger_util.push_log(symbol)
     if symbol in indices:
         instrument_type = "OPTIDX"
         stock = symbol
@@ -579,7 +579,7 @@ def upstox_equity_option_instrument_key( stock,symbol, spot_value, option_type):
         ]
 
     if filtered.empty:
-        push_log("❌ No matching option instrument found", "warning")
+        logger_util.push_log("❌ No matching option instrument found", "warning")
     else:
         filtered = filtered.copy()  # ✅ prevents slice warning
         filtered['strike'] = pd.to_numeric(filtered['strike'], errors='coerce')
@@ -587,7 +587,7 @@ def upstox_equity_option_instrument_key( stock,symbol, spot_value, option_type):
         # All available expiries
         sorted_expiries = sorted(filtered['expiry'].unique())
         if not sorted_expiries:
-            push_log("❌ No expiry available", "warning")
+            logger_util.push_log("❌ No expiry available", "warning")
         else:
             nearest_expiry = sorted_expiries[0]
 
@@ -611,7 +611,7 @@ def upstox_equity_option_instrument_key( stock,symbol, spot_value, option_type):
             nearest_option_df = nearest_option.to_frame().T
 
             instrument_key = nearest_option['instrument_key']
-            push_log(tabulate(nearest_option_df, headers="keys", tablefmt= "pretty"))
+            logger_util.push_log(tabulate(nearest_option_df, headers="keys", tablefmt= "pretty"))
             return nearest_option_df
 
 def upstox_commodity_option_instrument_key(name, symbol, close_price, option_type):
@@ -628,7 +628,7 @@ def upstox_commodity_option_instrument_key(name, symbol, close_price, option_typ
     ].copy()
 
     if filtered.empty:
-        push_log(f"❌ No OPTFUT contracts found for {name}", "warning")
+        logger_util.push_log(f"❌ No OPTFUT contracts found for {name}", "warning")
         return pd.DataFrame()
 
     # Ensure strike is numeric
@@ -647,7 +647,7 @@ def upstox_commodity_option_instrument_key(name, symbol, close_price, option_typ
     filtered = filtered[filtered['symbol_prefix'] == symbol]
 
     if filtered.empty:
-        push_log(f"⚠️ No instruments matched with symbol prefix '{symbol}'", "warning")
+        logger_util.push_log(f"⚠️ No instruments matched with symbol prefix '{symbol}'", "warning")
         return pd.DataFrame()
 
     # Find nearest strike above and below
@@ -662,7 +662,7 @@ def upstox_commodity_option_instrument_key(name, symbol, close_price, option_typ
     elif pd.notna(below_strike):
         nearest_strike = below_strike
     else:
-        push_log(f"⚠️ No nearby strikes found for {name} near price {close_price}", "waring")
+        logger_util.push_log(f"⚠️ No nearby strikes found for {name} near price {close_price}", "waring")
         return pd.DataFrame()
 
     # Get all rows for that nearest strike
@@ -672,14 +672,14 @@ def upstox_commodity_option_instrument_key(name, symbol, close_price, option_typ
     nearest_expiry = nearest_rows['expiry'].min()
     nearest_rows = nearest_rows[nearest_rows['expiry'] == nearest_expiry]
 
-    # Sort and push_log neatly
+    # Sort and logger_util.push_log neatly
     nearest_rows = nearest_rows.sort_values(by=['expiry', 'strike'])
-    push_log(tabulate(nearest_rows, headers="keys", tablefmt= "pretty"))
+    logger_util.push_log(tabulate(nearest_rows, headers="keys", tablefmt= "pretty"))
     return nearest_rows
 
 def upstox_fetch_option_data(upstox_access_token,stock, symbol, exchange_type,spot_value, tgt,lots, option_type):
     # Fetch instruments
-    push_log(f"{stock}--{symbol}--{spot_value}--{tgt}--{lots}--{option_type}")
+    logger_util.push_log(f"{stock}--{symbol}--{spot_value}--{tgt}--{lots}--{option_type}")
     if exchange_type == "EQUITY":
         nearest_option = upstox_equity_option_instrument_key( stock,symbol, spot_value, option_type)
     elif exchange_type == "COMMODITY":
@@ -698,7 +698,7 @@ def upstox_fetch_option_data(upstox_access_token,stock, symbol, exchange_type,sp
     option_intraday_data = upstox_fetch_intraday_data(upstox_access_token, instrument_key, 1)
 
     if option_intraday_data is None or option_intraday_data.empty or len(option_intraday_data) < 1:
-        push_log("⚠️ Insufficient intraday data for option (need at least 1 candles).", "warning")
+        logger_util.push_log("⚠️ Insufficient intraday data for option (need at least 1 candles).", "warning")
         return
 
     # Process only the last two candles
@@ -715,13 +715,13 @@ def upstox_fetch_option_data(upstox_access_token,stock, symbol, exchange_type,sp
     }
     option_buffer.append(candle)
 
-    push_log("+---------------------+----------+----------+----------+----------+")
-    push_log("| Time                | Open     | High     | Low      | Close    |")
-    push_log("+---------------------+----------+----------+----------+----------+")
+    logger_util.push_log("+---------------------+----------+----------+----------+----------+")
+    logger_util.push_log("| Time                | Open     | High     | Low      | Close    |")
+    logger_util.push_log("+---------------------+----------+----------+----------+----------+")
 
     for candle in [latest_candle]:
         dt_aware = candle.name if candle.name.tzinfo else ist.localize(candle.name)
-        push_log("| {:<19} | {:>8.2f} | {:>8.2f} | {:>8.2f} | {:>8.2f} |".format(
+        logger_util.push_log("| {:<19} | {:>8.2f} | {:>8.2f} | {:>8.2f} | {:>8.2f} |".format(
             dt_aware.strftime('%Y-%m-%d %H:%M'),
             candle['open'],
             candle['high'],
@@ -729,13 +729,13 @@ def upstox_fetch_option_data(upstox_access_token,stock, symbol, exchange_type,sp
             candle['close']
         ))
 
-    push_log("+---------------------+----------+----------+----------+----------+")
+    logger_util.push_log("+---------------------+----------+----------+----------+----------+")
 
     close_price = float(latest_candle["close"])
     target = (close_price * (100+int(tgt)))/100
     target_price = round(round(target / option_tick_size) * option_tick_size, 2)
     buy_price = close_price
-    push_log(f"Strike Price is: {strike}  {option_type}  Entry: {buy_price},  Target : {target_price}")
+    logger_util.push_log(f"Strike Price is: {strike}  {option_type}  Entry: {buy_price},  Target : {target_price}")
     lots = int(lots)
     lot_size = int(lot_size)
     if exchange_type == "EQUITY":
@@ -752,7 +752,7 @@ def upstox_fetch_option_data(upstox_access_token,stock, symbol, exchange_type,sp
             option_type = symbol[-2:]
 
             if quantity_old > 0 and (option_type == "PE" or option_type == "CE"):
-                push_log(f"You have live position for the Trading symbol  {symbol}, Skipping the {option_type}Order placing")
+                logger_util.push_log(f"You have live position for the Trading symbol  {symbol}, Skipping the {option_type}Order placing")
             else:
                 count += 1
                 if count == 1:
@@ -773,7 +773,7 @@ def upstox_commodity_instrument_key(name, symbol):
     ].copy()
 
     if filtered.empty:
-        push_log(f"❌ No FUTCOM contracts found for {name}", "warning")
+        logger_util.push_log(f"❌ No FUTCOM contracts found for {name}", "warning")
         return pd.DataFrame()
 
     today = datetime.datetime.now().date()
@@ -797,7 +797,7 @@ def upstox_commodity_instrument_key(name, symbol):
     later_symbol = make_symbol(l_year, l_month)
 
     symbols = [curr_symbol, next_symbol, later_symbol]
-    push_log(f"🎯 Target tradingsymbols (priority): {symbols}")
+    logger_util.push_log(f"🎯 Target tradingsymbols (priority): {symbols}")
 
     # --- Function to pick valid symbol ---
     def find_valid_symbol(symbols):
@@ -814,19 +814,19 @@ def upstox_commodity_instrument_key(name, symbol):
                 expiry = row['expiry']
                 days_to_expiry = (expiry - today).days
                 if days_to_expiry > 7:
-                    push_log(f"✅ Selected: {row['tradingsymbol']} | Expiry: {expiry} | {days_to_expiry} days left")
+                    logger_util.push_log(f"✅ Selected: {row['tradingsymbol']} | Expiry: {expiry} | {days_to_expiry} days left")
                     return matched.iloc[[_]]  # Return as DataFrame
                 else:
-                    push_log(f"⚠️ {row['tradingsymbol']} expires in {days_to_expiry} days — skipping")
+                    logger_util.push_log(f"⚠️ {row['tradingsymbol']} expires in {days_to_expiry} days — skipping")
 
         return pd.DataFrame()
 
     matched = find_valid_symbol(symbols)
 
     if matched.empty:
-        push_log("❌ No suitable contract found even in later month.", "warning")
-        push_log("🧾 Available tradingsymbols for reference:")
-        push_log(filtered[['tradingsymbol', 'expiry']].head(10))
+        logger_util.push_log("❌ No suitable contract found even in later month.", "warning")
+        logger_util.push_log("🧾 Available tradingsymbols for reference:")
+        logger_util.push_log(filtered[['tradingsymbol', 'expiry']].head(10))
 
     return matched
 
@@ -855,17 +855,17 @@ def upstox_trade_conditions_check(lots, tgt, indicators_df, credentials, stock,s
                     if option_type == "CE" and ((latest_willr < -70 and latest_supertrend > close_price) or (
                             latest_willr < -70 and latest_macd < latest_macd_signal) or (
                                                         latest_supertrend > close_price and latest_macd < latest_macd_signal)):
-                        push_log(f"The existing position is type CE with symbol {tradingsymbol}. CE exit condition met, closing existing CE position.")
+                        logger_util.push_log(f"The existing position is type CE with symbol {tradingsymbol}. CE exit condition met, closing existing CE position.")
                         upstox_place_order_single(upstox_access_token, instrument_token, quantity, "SELL",close_price)
                     elif option_type == "PE" and ((latest_willr > -30 and latest_supertrend < close_price) or (
                             latest_willr > -30 and latest_macd > latest_macd_signal) or (
                                                           latest_supertrend < close_price and latest_macd < latest_macd_signal)):
-                        push_log(f"The existing position is type PE with symbol {tradingsymbol}. PE exit condition met, closing existing PE position.")
+                        logger_util.push_log(f"The existing position is type PE with symbol {tradingsymbol}. PE exit condition met, closing existing PE position.")
                         upstox_place_order_single(upstox_access_token, instrument_token, quantity, "SELL",close_price)
 
         positions = upstox_fetch_positions(upstox_access_token)
         if latest_adx > latest_adxema and latest_willr > -30 and latest_supertrend < close_price and latest_macd > latest_macd_signal:
-            push_log("🔼 BUY SIGNAL GENERATED")
+            logger_util.push_log("🔼 BUY SIGNAL GENERATED")
             sys.stdout.flush()
             if positions:
                 count = 0
@@ -876,16 +876,16 @@ def upstox_trade_conditions_check(lots, tgt, indicators_df, credentials, stock,s
                         tradingsymbol = pos['tradingsymbol']
                         option_type = tradingsymbol[-2:]
                         if option_type == "CE":
-                            push_log(f"The existing position is type CE with symbol {tradingsymbol}. No new CALL trade placed ")
+                            logger_util.push_log(f"The existing position is type CE with symbol {tradingsymbol}. No new CALL trade placed ")
                 if count == 0:
-                    push_log(f"There are no live positions and BUY signal generated. Placing a new CE order")
+                    logger_util.push_log(f"There are no live positions and BUY signal generated. Placing a new CE order")
                     upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots,"CE")
             else:
-                push_log(f"There are no positions and BUY signal generated. Placing a new CE order")
+                logger_util.push_log(f"There are no positions and BUY signal generated. Placing a new CE order")
                 upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type, close_price, tgt, lots, "CE")
 
         elif latest_adx > latest_adxema and latest_willr < -70 and latest_supertrend > close_price and latest_macd < latest_macd_signal:
-            push_log("🔽 SELL SIGNAL GENERATED")
+            logger_util.push_log("🔽 SELL SIGNAL GENERATED")
             sys.stdout.flush()
             if positions:
                 count = 0
@@ -896,15 +896,15 @@ def upstox_trade_conditions_check(lots, tgt, indicators_df, credentials, stock,s
                         tradingsymbol = pos['tradingsymbol']
                         option_type = tradingsymbol[-2:]
                         if option_type == "PE":
-                            push_log(f"The existing position is type PE with symbol {tradingsymbol}. No new PUT trade placed ")
+                            logger_util.push_log(f"The existing position is type PE with symbol {tradingsymbol}. No new PUT trade placed ")
                 if count == 0:
                     upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots,"PE")
-                    push_log(f"There are no live positions and SELL signal generated. Placing a new PE order")
+                    logger_util.push_log(f"There are no live positions and SELL signal generated. Placing a new PE order")
             else:
                 upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots, "PE")
-                push_log(f"There are no positions and SELL signal generated. Placing a new PE order")
+                logger_util.push_log(f"There are no positions and SELL signal generated. Placing a new PE order")
         else:
-            push_log("⏸️ NO TRADE SIGNAL GENERATED")
+            logger_util.push_log("⏸️ NO TRADE SIGNAL GENERATED")
             sys.stdout.flush()
 
     elif strategy == "Ema10_Ema20_Supertrend":
@@ -926,14 +926,14 @@ def upstox_trade_conditions_check(lots, tgt, indicators_df, credentials, stock,s
 
                     if option_type == "CE" and (latest_Ema10 < latest_Ema20 or latest_supertrend > close_price):
                         upstox_place_order_single(upstox_access_token, instrument_token, quantity, "SELL", close_price)
-                        push_log(f"The existing position is type CE with symbol {tradingsymbol}. CE exit condition met, closing existing CE position ")
+                        logger_util.push_log(f"The existing position is type CE with symbol {tradingsymbol}. CE exit condition met, closing existing CE position ")
                     elif option_type == "PE" and (latest_Ema10 > latest_Ema20 or latest_supertrend < close_price):
                         upstox_place_order_single(upstox_access_token, instrument_token, quantity, "SELL", close_price)
-                        push_log(f"The existing position is type PE with symbol {tradingsymbol}. PE exit condition met, closing existing PE position ")
+                        logger_util.push_log(f"The existing position is type PE with symbol {tradingsymbol}. PE exit condition met, closing existing PE position ")
 
         positions = upstox_fetch_positions(upstox_access_token)
         if latest_Ema10 > latest_Ema20 and latest_supertrend < close_price:
-            push_log("🔼BUY SIGNAL GENERATED")
+            logger_util.push_log("🔼BUY SIGNAL GENERATED")
             sys.stdout.flush()
             if positions:
                 count = 0
@@ -944,17 +944,17 @@ def upstox_trade_conditions_check(lots, tgt, indicators_df, credentials, stock,s
                         tradingsymbol = pos['tradingsymbol']
                         option_type = tradingsymbol[-2:]
                         if option_type == "CE":
-                            push_log(f"The existing position is type CE with symbol {tradingsymbol}. No new CALL trade placed ")
+                            logger_util.push_log(f"The existing position is type CE with symbol {tradingsymbol}. No new CALL trade placed ")
 
                 if count == 0:
                     upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots, "CE")
-                    push_log(f"There are no live positions and BUY signal generated. Placing a new CE order")
+                    logger_util.push_log(f"There are no live positions and BUY signal generated. Placing a new CE order")
             else:
                 upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots, "CE")
-                push_log(f"There are no positions and BUY signal generated. Placing a new CE order")
+                logger_util.push_log(f"There are no positions and BUY signal generated. Placing a new CE order")
 
         elif latest_Ema10 < latest_Ema20 and latest_supertrend > close_price:
-            push_log("🔽 SELL SIGNAL GENERATED")
+            logger_util.push_log("🔽 SELL SIGNAL GENERATED")
             sys.stdout.flush()
             if positions:
                 count = 0
@@ -965,16 +965,16 @@ def upstox_trade_conditions_check(lots, tgt, indicators_df, credentials, stock,s
                         tradingsymbol = pos['tradingsymbol']
                         option_type = tradingsymbol[-2:]
                         if option_type == "PE":
-                            push_log(f"The existing position is type PE with symbol {tradingsymbol}. No new PUT trade placed ")
+                            logger_util.push_log(f"The existing position is type PE with symbol {tradingsymbol}. No new PUT trade placed ")
 
                 if count == 0:
                     upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots, "PE")
-                    push_log(f"There are no live positions and SELL signal generated. Placing a new PE order")
+                    logger_util.push_log(f"There are no live positions and SELL signal generated. Placing a new PE order")
             else:
                 upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots, "PE")
-                push_log(f"There are no positions and SELL signal generated. Placing a new PE order")
+                logger_util.push_log(f"There are no positions and SELL signal generated. Placing a new PE order")
         else:
-            push_log("⏸️NO TRADE SIGNAL GENERATED")
+            logger_util.push_log("⏸️NO TRADE SIGNAL GENERATED")
             sys.stdout.flush()
     elif strategy == "Ema10_Ema20_MACD_Supertrend":
         latest_Ema10 = indicators_df["ema10"].iloc[-1]
@@ -983,7 +983,7 @@ def upstox_trade_conditions_check(lots, tgt, indicators_df, credentials, stock,s
         latest_macd = indicators_df['MACD'].iloc[-1]
         latest_macd_signal = indicators_df['MACD_signal'].iloc[-1]
         close_price = float(indicators_df['close'].iloc[-1])
-        push_log(f"{latest_Ema10}--{latest_Ema20}--{latest_supertrend}--{latest_macd}--{latest_macd_signal}--{close_price}")
+        logger_util.push_log(f"{latest_Ema10}--{latest_Ema20}--{latest_supertrend}--{latest_macd}--{latest_macd_signal}--{close_price}")
         positions = upstox_fetch_positions(upstox_access_token)
         if positions:
             count = 0
@@ -996,41 +996,41 @@ def upstox_trade_conditions_check(lots, tgt, indicators_df, credentials, stock,s
                     option_type = tradingsymbol[-2:]
                     if latest_Ema10 > latest_Ema20 and latest_supertrend < close_price and latest_macd > latest_macd_signal:
                         if option_type == "CE":
-                            push_log("BUY SIGNAL GENERATED. You have existing CALL position. No new order placed")
+                            logger_util.push_log("BUY SIGNAL GENERATED. You have existing CALL position. No new order placed")
                         elif option_type == "PE":
-                            push_log("BUY SIGNAL GENERATED.  Closing existing PUT Position and place new CALL order")
+                            logger_util.push_log("BUY SIGNAL GENERATED.  Closing existing PUT Position and place new CALL order")
                             upstox_place_order_single(upstox_access_token, instrument_token, quantity, "SELL", 0)
                             upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots, "CE")
                     elif latest_Ema10 < latest_Ema20 and latest_supertrend > close_price and latest_macd < latest_macd_signal:
                         if option_type == "PE":
-                            push_log("SELL SIGNAL GENERATED. You have existing PUT position. No new order placed")
+                            logger_util.push_log("SELL SIGNAL GENERATED. You have existing PUT position. No new order placed")
                         elif option_type == "CE":
-                            push_log("SELL SIGNAL GENERATED.  Closing existing CALL Position and place new CALL order")
+                            logger_util.push_log("SELL SIGNAL GENERATED.  Closing existing CALL Position and place new CALL order")
                             upstox_place_order_single(upstox_access_token, instrument_token, quantity, "SELL", 0)
                             upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots, "PE")
                     elif option_type == "CE":
                         if latest_Ema10 < latest_Ema20 or latest_supertrend > close_price or latest_macd < latest_macd_signal:
-                            push_log("NO Trade Signal Generated .CALL position exit condition met. Closing existing CALL position")
+                            logger_util.push_log("NO Trade Signal Generated .CALL position exit condition met. Closing existing CALL position")
                             upstox_place_order_single(upstox_access_token, instrument_token, quantity, "SELL", 0)
                     elif option_type == "PE":
                         if latest_Ema10 > latest_Ema20 or latest_supertrend < close_price or latest_macd > latest_macd_signal:
-                            push_log("NO Trade Signal Generated. PUT position exit condition met. Closing existing PUT position")
+                            logger_util.push_log("NO Trade Signal Generated. PUT position exit condition met. Closing existing PUT position")
                             upstox_place_order_single(upstox_access_token, instrument_token, quantity, "SELL", 0)
             if count == 0:
                 if latest_Ema10 > latest_Ema20 and latest_supertrend < close_price and latest_macd > latest_macd_signal:
-                    push_log("BUY SIGNAL GENERATED. No live position exist. Placing new CALL order")
+                    logger_util.push_log("BUY SIGNAL GENERATED. No live position exist. Placing new CALL order")
                     upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots, "CE")
                 elif latest_Ema10 < latest_Ema20 and latest_supertrend > close_price and latest_macd < latest_macd_signal:
-                    push_log("SELL SIGNAL GENERATED. No live position exist. Placing new PUT order")
+                    logger_util.push_log("SELL SIGNAL GENERATED. No live position exist. Placing new PUT order")
                     upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots, "PE")
                 else:
-                    push_log("NO Trade Signal Generated")
+                    logger_util.push_log("NO Trade Signal Generated")
         else:
             if latest_Ema10 > latest_Ema20 and latest_supertrend < close_price and latest_macd > latest_macd_signal:
-                push_log("BUY SIGNAL GENERATED. Placing new CALL order")
+                logger_util.push_log("BUY SIGNAL GENERATED. Placing new CALL order")
                 upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots, "CE")
             elif latest_Ema10 < latest_Ema20 and latest_supertrend > close_price and latest_macd < latest_macd_signal:
-                push_log("SELL SIGNAL GENERATED. Placing new PUT order")
+                logger_util.push_log("SELL SIGNAL GENERATED. Placing new PUT order")
                 upstox_fetch_option_data(upstox_access_token, stock, symbol, exchange_type,close_price, tgt, lots, "PE")
             else:
-                push_log("NO Trade Signal Generated")
+                logger_util.push_log("NO Trade Signal Generated")

@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException, Request, Query
 from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
-from logger_util import push_log
+import backend.logger_util as logger_util 
 import get_lot_size as ls
 from find_positions_with_symbol import find_positions_for_symbol
 import json
@@ -40,7 +40,7 @@ async def get_latest_instruments():
             media_type="application/gzip"
         )
     except Exception as e:
-        push_log(f"❌ Error serving instrument file: {e}", "error")
+        logger_util.push_log(f"❌ Error serving instrument file: {e}", "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -136,7 +136,7 @@ async def connect_broker(request: Request):
             except Exception as e:
                 status = "failed"
                 message = f"An error occurred: {str(e)}"
-                push_log(message, "error")
+                logger_util.push_log(message, "error")
 
             responses.append({
                 "broker": broker_name,
@@ -153,7 +153,7 @@ async def connect_broker(request: Request):
 
         return JSONResponse(content=responses)
     except Exception as e:
-        push_log(f"❌ Error in connect_broker: {e}", "error")
+        logger_util.push_log(f"❌ Error in connect_broker: {e}", "error")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -183,7 +183,7 @@ async def get_lot_size(request: Request):
 
     except Exception as e:
         msg = f"Error in get_lot_size: {e}"
-        push_log(msg, "error")
+        logger_util.push_log(msg, "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -210,5 +210,5 @@ async def get_lot_size_get(
             return JSONResponse(status_code=404, content={"message": "Lot size not found."})
     except Exception as e:
         msg = f"Error in get_lot_size (GET): {e}"
-        push_log(msg, "error")
+        logger_util.push_log(msg, "error")
         raise HTTPException(status_code=500, detail=str(e))

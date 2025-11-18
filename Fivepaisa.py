@@ -2,7 +2,7 @@ import requests
 import sys
 import datetime
 import pandas as pd
-from logger_util import logger, push_log, push_payload, get_log_buffer
+import backend.logger_util as logger_util
 
 def fivepaisa_get_balance(app_key, access_token, client_code):
 
@@ -25,7 +25,7 @@ def fivepaisa_get_balance(app_key, access_token, client_code):
         balance = {"Available Margin": balance_data['body']['EquityMargin'][0]['NetAvailableMargin']}
         return balance
     else:
-        logger.error(f"Error: {response.status_code} - {response.text}")
+        logger_util.push_log(f"Error: {response.status_code} - {response.text}","error")
         return None
 
 def fivepaisa_scripcode_fetch(name):
@@ -41,10 +41,10 @@ def fivepaisa_scripcode_fetch(name):
 
     if not result.empty:
         scrip_code = result.iloc[0]["ScripCode"]
-        logger.info(f"ScripCode for {name} (NSE) is: {scrip_code}")
+        logger_util.push_log(f"ScripCode for {name} (NSE) is: {scrip_code}")
         return scrip_code
     else:
-        logger.info(f"No match found for {name} in NSE")
+        logger_util.push_log(f"No match found for {name} in NSE")
 
 def fivepaisa_get_nearest_option(symbol_root, spot_value, option_type):
     # Load 5paisa instruments master
@@ -108,7 +108,7 @@ def fivepaisa_fetch_positions(app_key, access_token, client_code):
         net_positions = positions_data['body']['NetPositionDetail']
         return net_positions
     else:
-        logger.error(f"Error: {response.status_code} - {response.text}")
+        logger_util.push_log(f"Error: {response.status_code} - {response.text}","error")
         return None
 
 def fivepaisa_historical_data_fetch(access_token, scripCode, interval,days):
@@ -138,10 +138,10 @@ def fivepaisa_historical_data_fetch(access_token, scripCode, interval,days):
       df.set_index("dateTime", inplace=True)
       return df
     else:
-      logger.error("❌ No candle data found in response.")
+      logger_util.push_log("❌ No candle data found in response.","error","error")
       return pd.DataFrame()
   else:
-    logger.error(f"❌ Error: {resp.status_code} - {resp.text}")
+    logger_util.push_log(f"❌ Error: {resp.status_code} - {resp.text}","error")
     return pd.DataFrame()
 
 def fivepaisa_close_position(credentials, pos):
@@ -179,9 +179,9 @@ def fivepaisa_close_position(credentials, pos):
     resp = requests.post(url, headers=headers, json=payload)
 
     if resp.status_code == 200:
-        logger.info(resp.json())
+        logger_util.push_log(resp.json())
     else:
-        logger.error("Error:", resp.status_code, resp.text)
+        logger_util.push_log(f"Error: {resp.status_code}, {resp.text}","error")
 
 def fivepaisa_place_single_order(access_token, scripCode, user_key, scrip_data, price, quantity, order_type):
     url = "https://Openapi.5paisa.com/VendorsAPI/Service1.svc/V1/PlaceOrderRequest"
@@ -214,9 +214,9 @@ def fivepaisa_place_single_order(access_token, scripCode, user_key, scrip_data, 
     resp = requests.post(url, headers=headers, json=payload)
 
     if resp.status_code == 200:
-        logger.info(resp.json())
+        logger_util.push_log(resp.json())
     else:
-        logger.error("Error:", resp.status_code, resp.text)
+        logger_util.push_log(f"Error: {resp.status_code}, {resp.text}","error")
 
 def fivepaisa_place_bracket_order(access_token, scripCode, user_key, scrip_data, price, quantity, order_type, target):
     url = "https://Openapi.5paisa.com/VendorsAPI/Service1.svc/V1/PlaceOrderRequest"
@@ -251,9 +251,9 @@ def fivepaisa_place_bracket_order(access_token, scripCode, user_key, scrip_data,
     resp = requests.post(url, headers=headers, json=payload)
 
     if resp.status_code == 200:
-        logger.info(resp.json())
+        logger_util.push_log(resp.json())
     else:
-        logger.error("Error:", resp.status_code, resp.text)
+        logger_util.push_log(f"Error: {resp.status_code}, {resp.text}","error")
 
 def format_option_name(option_str: str) -> str:
     parts = option_str.split()
@@ -279,7 +279,7 @@ def fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt,
     scrip_data = format_option_name(scripdata)
     lot_size = int(nearest_option['LotSize'].values[0])
     tick_size = float(nearest_option['TickSize'].values[0])
-    logger.info(f"{scrip_code}--{scrip_data}--{lot_size}--{tick_size}")
+    logger_util.push_log(f"{scrip_code}--{scrip_data}--{lot_size}--{tick_size}")
     option_candle_data = fivepaisa_historical_data_fetch(access_token, scrip_code, 1,1)
     close_price = option_candle_data['close'].iat[-1]
     target = round(((int(close_price) * (100+int(tgt)))/100)/tick_size)*tick_size
@@ -318,16 +318,16 @@ def fivepaisa_trade_conditions_check(lots, tgt, indicators_df, credentials, stoc
                             latest_willr < -70 and latest_macd < latest_macd_signal) or (
                                                         latest_supertrend > close_price and latest_macd < latest_macd_signal)):
                         fivepaisa_place_single_order(access_token, scrip_code, user_key, scrip_data, price, quantity, "S")
-                        logger.info(f"The existing position is type CE with symbol {scrip_data}. CE exit condition met, closing existing CE position.")
+                        logger_util.push_log(f"The existing position is type CE with symbol {scrip_data}. CE exit condition met, closing existing CE position.")
                     elif option_type == "PE" and ((latest_willr > -30 and latest_supertrend < close_price) or (
                             latest_willr > -30 and latest_macd > latest_macd_signal) or (
                                                           latest_supertrend < close_price and latest_macd < latest_macd_signal)):
                         fivepaisa_place_single_order(access_token, scrip_code, user_key, scrip_data, price, quantity, "S")
-                        logger.info(f"The existing position is type PE with symbol {scrip_data}. PE exit condition met, closing existing PE position.")
+                        logger_util.push_log(f"The existing position is type PE with symbol {scrip_data}. PE exit condition met, closing existing PE position.")
 
         positions = fivepaisa_fetch_positions(user_key, access_token, client_code)
         if latest_adx > latest_adxema and latest_willr > -30 and latest_supertrend < close_price and latest_macd > latest_macd_signal:
-            logger.info("🔼 BUY SIGNAL GENERATED")
+            logger_util.push_log("🔼 BUY SIGNAL GENERATED")
             sys.stdout.flush()
             if positions:
                 count = 0
@@ -341,17 +341,17 @@ def fivepaisa_trade_conditions_check(lots, tgt, indicators_df, credentials, stoc
                         option_type = parts[2]
                         price = pos['LTP']
                         if option_type == "CE":
-                            logger.info(f"The existing position is type CE with symbol {scrip_data}. No new CALL trade placed ")
+                            logger_util.push_log(f"The existing position is type CE with symbol {scrip_data}. No new CALL trade placed ")
 
                 if count == 0:
                     fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots,"CE")
-                    logger.info(f"There are no live positions and BUY signal generated. Placing a new CE order")
+                    logger_util.push_log(f"There are no live positions and BUY signal generated. Placing a new CE order")
             else:
                 fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots, "CE")
-                logger.info(f"There are no positions and BUY signal generated. Placing a new CE order")
+                logger_util.push_log(f"There are no positions and BUY signal generated. Placing a new CE order")
 
         elif latest_adx > latest_adxema and latest_willr < -70 and latest_supertrend > close_price and latest_macd < latest_macd_signal:
-            logger.info("🔽 SELL SIGNAL GENERATED")
+            logger_util.push_log("🔽 SELL SIGNAL GENERATED")
             sys.stdout.flush()
             if positions:
                 count = 0
@@ -365,15 +365,15 @@ def fivepaisa_trade_conditions_check(lots, tgt, indicators_df, credentials, stoc
                         option_type = parts[2]
                         price = pos['LTP']
                         if option_type == "PE":
-                            logger.info(f"The existing position is type PE with symbol {scrip_data}. No new PUT trade placed ")
+                            logger_util.push_log(f"The existing position is type PE with symbol {scrip_data}. No new PUT trade placed ")
                 if count == 0:
                     fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots,"PE")
-                    logger.info(f"There are no live positions and SELL signal generated. Placing a new PE order")
+                    logger_util.push_log(f"There are no live positions and SELL signal generated. Placing a new PE order")
             else:
                 fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots, "PE")
-                logger.info(f"There are no positions and SELL signal generated. Placing a new PE order")
+                logger_util.push_log(f"There are no positions and SELL signal generated. Placing a new PE order")
         else:
-            logger.info("⏸️ NO TRADE SIGNAL GENERATED")
+            logger_util.push_log("⏸️ NO TRADE SIGNAL GENERATED")
             sys.stdout.flush()
 
     elif strategy == "Ema10_Ema20_Supertrend":
@@ -396,15 +396,15 @@ def fivepaisa_trade_conditions_check(lots, tgt, indicators_df, credentials, stoc
                     price = pos['LTP']
                     if option_type == "CE" and (latest_Ema10 < latest_Ema20 or latest_supertrend > close_price):
                         fivepaisa_place_single_order(access_token, scrip_code, user_key, scrip_data, price, quantity, "S")
-                        logger.info(
+                        logger_util.push_log(
                             f"The existing position is type CE with symbol {scrip_data}. CE exit condition met, closing existing CE position ")
                     elif option_type == "PE" and (latest_Ema10 > latest_Ema20 or latest_supertrend < close_price):
                         fivepaisa_place_single_order(access_token, scrip_code, user_key, scrip_data, price, quantity, "S")
-                        logger.info(f"The existing position is type PE with symbol {scrip_data}. PE exit condition met, closing existing PE position ")
+                        logger_util.push_log(f"The existing position is type PE with symbol {scrip_data}. PE exit condition met, closing existing PE position ")
 
         positions = fivepaisa_fetch_positions(user_key, access_token, client_code)
         if latest_Ema10 > latest_Ema20 and latest_supertrend < close_price:
-            logger.info("🔼 BUY SIGNAL GENERATED")
+            logger_util.push_log("🔼 BUY SIGNAL GENERATED")
             sys.stdout.flush()
             if positions:
                 count = 0
@@ -418,17 +418,17 @@ def fivepaisa_trade_conditions_check(lots, tgt, indicators_df, credentials, stoc
                         option_type = parts[2]
                         price = pos['LTP']
                         if option_type == "CE":
-                            logger.info(f"The existing position is type CE with symbol {scrip_data}. No new CALL trade placed ")
+                            logger_util.push_log(f"The existing position is type CE with symbol {scrip_data}. No new CALL trade placed ")
 
                 if count == 0:
                     fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots, "CE")
-                    logger.info(f"There are no live positions and BUY signal generated. Placing a new CE order")
+                    logger_util.push_log(f"There are no live positions and BUY signal generated. Placing a new CE order")
             else:
                 fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots, "CE")
-                logger.info(f"There are no positions and BUY signal generated. Placing a new CE order")
+                logger_util.push_log(f"There are no positions and BUY signal generated. Placing a new CE order")
 
         elif latest_Ema10 < latest_Ema20 and latest_supertrend > close_price:
-            logger.info("🔽 SELL SIGNAL GENERATED")
+            logger_util.push_log("🔽 SELL SIGNAL GENERATED")
             sys.stdout.flush()
             if positions:
                 count = 0
@@ -442,16 +442,16 @@ def fivepaisa_trade_conditions_check(lots, tgt, indicators_df, credentials, stoc
                         option_type = parts[2]
                         price = pos['LTP']
                         if option_type == "PE":
-                            logger.info(f"The existing position is type PE with symbol {scrip_data}. No new PUT trade placed ")
+                            logger_util.push_log(f"The existing position is type PE with symbol {scrip_data}. No new PUT trade placed ")
 
                 if count == 0:
                     fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots, "PE")
-                    logger.info(f"There are no live positions and SELL signal generated. Placing a new PE order")
+                    logger_util.push_log(f"There are no live positions and SELL signal generated. Placing a new PE order")
             else:
                 fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots, "PE")
-                logger.info(f"There are no positions and SELL signal generated. Placing a new PE order")
+                logger_util.push_log(f"There are no positions and SELL signal generated. Placing a new PE order")
         else:
-            logger.info("⏸️ NO TRADE SIGNAL GENERATED")
+            logger_util.push_log("⏸️ NO TRADE SIGNAL GENERATED")
             sys.stdout.flush()
     elif strategy == "Ema10_Ema20_MACD_Supertrend":
         latest_Ema10 = indicators_df["ema10"].iloc[-1]
@@ -474,41 +474,41 @@ def fivepaisa_trade_conditions_check(lots, tgt, indicators_df, credentials, stoc
                     price = pos['LTP']
                     if latest_Ema10 > latest_Ema20 and latest_supertrend < close_price and latest_macd > latest_macd_signal:
                         if option_type == "CE":
-                            logger.info("BUY SIGNAL GENERATED. You have existing CALL position. No new order placed")
+                            logger_util.push_log("BUY SIGNAL GENERATED. You have existing CALL position. No new order placed")
                         elif option_type == "PE":
-                            logger.info("BUY SIGNAL GENERATED.  Closing existing PUT Position and place new CALL order")
+                            logger_util.push_log("BUY SIGNAL GENERATED.  Closing existing PUT Position and place new CALL order")
                             fivepaisa_place_single_order(access_token, scrip_code, user_key, scrip_data, price, quantity, "S")
                             fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots, "CE")
                     elif latest_Ema10 < latest_Ema20 and latest_supertrend > close_price and latest_macd < latest_macd_signal:
                         if option_type == "PE":
-                            logger.info("SELL SIGNAL GENERATED. You have existing PUT position. No new order placed")
+                            logger_util.push_log("SELL SIGNAL GENERATED. You have existing PUT position. No new order placed")
                         elif option_type == "CE":
-                            logger.info("SELL SIGNAL GENERATED.  Closing existing CALL Position and place new CALL order")
+                            logger_util.push_log("SELL SIGNAL GENERATED.  Closing existing CALL Position and place new CALL order")
                             fivepaisa_place_single_order(access_token, scrip_code, user_key, scrip_data, price, quantity, "S")
                             fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots, "PE")
                     elif option_type == "CE":
                         if latest_Ema10 < latest_Ema20 or latest_supertrend > close_price or latest_macd < latest_macd_signal:
-                            logger.info("NO Trade Signal Generated .CALL position exit condition met. Closing existing CALL position")
+                            logger_util.push_log("NO Trade Signal Generated .CALL position exit condition met. Closing existing CALL position")
                             fivepaisa_place_single_order(access_token, scrip_code, user_key, scrip_data, price, quantity, "S")
                     elif option_type == "PE":
                         if latest_Ema10 > latest_Ema20 or latest_supertrend < close_price or latest_macd > latest_macd_signal:
-                            logger.info("NO Trade Signal Generated. PUT position exit condition met. Closing existing PUT position")
+                            logger_util.push_log("NO Trade Signal Generated. PUT position exit condition met. Closing existing PUT position")
                             fivepaisa_place_single_order(access_token, scrip_code, user_key, scrip_data, price, quantity, "S")
             if count == 0:
                 if latest_Ema10 > latest_Ema20 and latest_supertrend < close_price and latest_macd > latest_macd_signal:
-                    logger.info("BUY SIGNAL GENERATED. No live position exist. Placing new CALL order")
+                    logger_util.push_log("BUY SIGNAL GENERATED. No live position exist. Placing new CALL order")
                     fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots, "CE")
                 elif latest_Ema10 < latest_Ema20 and latest_supertrend > close_price and latest_macd < latest_macd_signal:
-                    logger.info("SELL SIGNAL GENERATED. No live position exist. Placing new PUT order")
+                    logger_util.push_log("SELL SIGNAL GENERATED. No live position exist. Placing new PUT order")
                     fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots, "PE")
                 else:
-                    logger.info("NO Trade Signal Generated")
+                    logger_util.push_log("NO Trade Signal Generated")
         else:
             if latest_Ema10 > latest_Ema20 and latest_supertrend < close_price and latest_macd > latest_macd_signal:
-                logger.info("BUY SIGNAL GENERATED. Placing new CALL order")
+                logger_util.push_log("BUY SIGNAL GENERATED. Placing new CALL order")
                 fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots, "CE")
             elif latest_Ema10 < latest_Ema20 and latest_supertrend > close_price and latest_macd < latest_macd_signal:
-                logger.info("SELL SIGNAL GENERATED. Placing new PUT order")
+                logger_util.push_log("SELL SIGNAL GENERATED. Placing new PUT order")
                 fivepaisa_fetch_option_data(access_token, user_key, stock, close_price, tgt, lots, "PE")
             else:
-                logger.info("NO Trade Signal Generated")
+                logger_util.push_log("NO Trade Signal Generated")

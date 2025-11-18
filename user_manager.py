@@ -1,6 +1,6 @@
 import json
 import os
-from email_utils import send_email   # <-- make sure send_email is in email_utils.py
+from backend.email_utils import send_email   # <-- make sure send_email is in email_utils.py
 
 USERS_FILE = "users.json"
 
